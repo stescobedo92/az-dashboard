@@ -1,0 +1,97 @@
+name: Publish vcpkg port
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without leading v
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate-port:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+
+      - name: Render local vcpkg port
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${VERSION}.tar.gz"
+          curl -fsSL "${ARCHIVE_URL}" -o source.tar.gz
+          SHA512="$(vcpkg hash source.tar.gz)"
+          mkdir -p ports/az-dashboard
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g; s/@SHA512@/${SHA512}/g" packaging/vcpkg/portfile.cmake.in > ports/az-dashboard/portfile.cmake
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" packaging/vcpkg/vcpkg.json.in > ports/az-dashboard/vcpkg.json
+
+      - name: Validate manifest build
+        run: >
+          vcpkg install
+          --overlay-ports=ports
+          --triplet=x64-linux
+          az-dashboard
+
+      - name: Upload rendered port
+        uses: actions/upload-artifact@v4
+        with:
+          name: az-dashboard-vcpkg-port
+          path: ports/az-dashboard
+
+  publish-private-registry:
+    needs: validate-port
+    runs-on: ubuntu-latest
+    env:
+      VCPKG_REGISTRY_REPOSITORY: ${{ secrets.VCPKG_REGISTRY_REPOSITORY }}
+    steps:
+      - name: Skip private registry publish when secrets are absent
+        if: env.VCPKG_REGISTRY_REPOSITORY == ''
+        run: echo "VCPKG_REGISTRY_REPOSITORY is not configured; rendered port artifact was already uploaded."
+
+      - name: Checkout source
+        if: env.VCPKG_REGISTRY_REPOSITORY != ''
+        uses: actions/checkout@v4
+
+      - name: Checkout vcpkg registry
+        if: env.VCPKG_REGISTRY_REPOSITORY != ''
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.VCPKG_REGISTRY_REPOSITORY }}
+          token: ${{ secrets.VCPKG_REGISTRY_TOKEN }}
+          path: registry
+
+      - name: Render port into registry branch
+        if: env.VCPKG_REGISTRY_REPOSITORY != ''
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${VERSION}.tar.gz"
+          curl -fsSL "${ARCHIVE_URL}" -o source.tar.gz
+          SHA512="$(vcpkg hash source.tar.gz)"
+          BRANCH="feature/publish-az-dashboard-${VERSION}"
+          cd registry
+          git checkout -b "${BRANCH}"
+          mkdir -p ports/az-dashboard
+          cd ..
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g; s/@SHA512@/${SHA512}/g" packaging/vcpkg/portfile.cmake.in > registry/ports/az-dashboard/portfile.cmake
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" packaging/vcpkg/vcpkg.json.in > registry/ports/az-dashboard/vcpkg.json
+          cd registry
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add ports/az-dashboard
+          git commit -m "Publish az-dashboard ${VERSION} vcpkg port"
+          git push --set-upstream origin "${BRANCH}"
+          gh pr create --fill --title "Publish az-dashboard ${VERSION}" --body "Publishes the az-dashboard vcpkg port generated from ${GITHUB_REPOSITORY}@${VERSION}."
+        env:
+          GH_TOKEN: ${{ secrets.VCPKG_REGISTRY_TOKEN }}

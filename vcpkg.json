@@ -1,0 +1,11 @@
+{
+  "name": "az-dashboard",
+  "version-string": "0.1.0",
+  "description": "Azure cost, trend, and waste diagnostics CLI built with modern C++23 and FTXUI.",
+  "license": "MIT",
+  "dependencies": [
+    "ftxui",
+    "nlohmann-json",
+    "gtest"
+  ]
+}
