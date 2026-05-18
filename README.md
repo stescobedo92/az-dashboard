@@ -1,8 +1,7 @@
 # azdash
 
-`azdash` is an Azure-focused C++23 CLI inspired by the command surface of
-[`aws-doctor`](https://github.com/elC0mpa/aws-doctor). It audits Azure spending,
-six-month cost trends, and waste signals from Azure Advisor plus resource
+`azdash` is an Azure-focused C++23 CLI. It audits Azure spending,
+Six-month cost trends, and waste signals from Azure Advisor, plus resource
 heuristics, then renders the results as an FTXUI table, JSON, CSV, or a PDF
 report.
 
@@ -89,56 +88,5 @@ azdash report waste compute network --path ./reports/waste.pdf
 azdash version
 azdash update
 ```
-
-## Command parity with aws-doctor
-
-| aws-doctor command | azdash command | Azure behavior |
-| --- | --- | --- |
-| `cost` | `cost` | Compares service costs between current and previous windows. |
-| `trend [services...]` | `trend [services...]` | Aggregates the last six months of Azure usage costs. |
-| `waste [checks...]` | `waste [checks...]` | Uses Advisor cost recommendations and resource heuristics. |
-| `report cost` | `report cost` | Writes a PDF cost comparison report. |
-| `report trend` | `report trend` | Writes a PDF trend report. |
-| `report waste` | `report waste` | Writes a PDF waste report. |
-| `version` | `version` | Prints the compiled version. |
-| `update` | `update` | Prints package-manager update guidance. |
-
-## Waste selectors
-
-Selectors are case-insensitive. An empty selector list runs all checks.
-
-```bash
-azdash waste advisor
-azdash waste compute
-azdash waste network
-azdash waste advisor compute network
-```
-
-## CI and vcpkg publication
-
-`.github/workflows/ci.yml` builds and tests on Linux, Windows, and macOS through
-vcpkg manifest mode.
-
-`.github/workflows/vcpkg-publish.yml` validates a rendered vcpkg port on release.
-If the repository secrets `VCPKG_REGISTRY_REPOSITORY` and `VCPKG_REGISTRY_TOKEN`
-exist, it also opens a PR against that vcpkg registry. Without those secrets, it
-still uploads the rendered `ports/az-dashboard` directory as a release artifact
-so the port can be submitted to an internal registry or to the official vcpkg
-repository.
-
-## Development
-
-```bash
-cmake --preset debug \
-  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-cmake --build --preset debug
-ctest --preset debug
-```
-
-When adding a new Azure check:
-
-1. Add the Azure collection call to `AzureCliClient` or a new provider.
-2. Normalize the result into `WasteFinding`, `ServiceCost`, or `MonthCost`.
-3. Keep analytics generic and provider-free.
 4. Add focused GTest coverage for parsing, filtering, and rendering behavior.
 5. Document public methods with C++ documentation comments.
