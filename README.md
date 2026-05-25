@@ -56,7 +56,7 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 docker build -t azdash .
-docker run --rm -it -v "$HOME/.azure:/root/.azure" azdash cost
+docker run --rm -it -v "$HOME/.azure:/home/azdash/.azure:ro" azdash cost
 ```
 
 ## Usage

@@ -18,16 +18,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up vcpkg
-        uses: lukka/run-vcpkg@v11
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
 
       - name: Render local vcpkg port
         shell: bash
         run: |
           VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
           VERSION="${VERSION#v}"
+          if [[ ! "${VERSION}" =~ ^[0-9]+([.][0-9]+){0,3}([-+][A-Za-z0-9._-]+)?$ ]]; then
+            echo "Invalid version: ${VERSION}" >&2
+            exit 1
+          fi
           ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${VERSION}.tar.gz"
           curl -fsSL "${ARCHIVE_URL}" -o source.tar.gz
           SHA512="$(vcpkg hash source.tar.gz)"
@@ -43,7 +47,7 @@ jobs:
           az-dashboard
 
       - name: Upload rendered port
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: az-dashboard-vcpkg-port
           path: ports/az-dashboard
@@ -60,11 +64,11 @@ jobs:
 
       - name: Checkout source
         if: env.VCPKG_REGISTRY_REPOSITORY != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Checkout vcpkg registry
         if: env.VCPKG_REGISTRY_REPOSITORY != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ secrets.VCPKG_REGISTRY_REPOSITORY }}
           token: ${{ secrets.VCPKG_REGISTRY_TOKEN }}
@@ -76,6 +80,10 @@ jobs:
         run: |
           VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
           VERSION="${VERSION#v}"
+          if [[ ! "${VERSION}" =~ ^[0-9]+([.][0-9]+){0,3}([-+][A-Za-z0-9._-]+)?$ ]]; then
+            echo "Invalid version: ${VERSION}" >&2
+            exit 1
+          fi
           ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${VERSION}.tar.gz"
           curl -fsSL "${ARCHIVE_URL}" -o source.tar.gz
           SHA512="$(vcpkg hash source.tar.gz)"
