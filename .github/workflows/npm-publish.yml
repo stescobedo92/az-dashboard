@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   NPM_PACKAGE_NAME: "@stescobedo9205/azdash"
@@ -182,4 +183,4 @@ jobs:
             echo "${NPM_PACKAGE_NAME}@${VERSION} is already published."
             exit 0
           fi
-          npm publish --access public
+          npm publish --access public --provenance

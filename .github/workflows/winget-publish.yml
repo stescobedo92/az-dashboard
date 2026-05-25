@@ -87,6 +87,7 @@ jobs:
           PublisherUrl: https://github.com/stescobedo92
           Author: Sergio Triana Escobedo
           PackageName: azdash
+          Moniker: azdash
           PackageUrl: https://github.com/${env:GITHUB_REPOSITORY}
           License: MIT
           LicenseUrl: https://github.com/${env:GITHUB_REPOSITORY}/blob/master/LICENSE
