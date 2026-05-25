@@ -189,6 +189,12 @@ public:
 
 private:
   static void write_file_without_following_symlink(const std::filesystem::path& path, const std::string& content) {
+    std::error_code status_error;
+    const auto existing_status = std::filesystem::symlink_status(path, status_error);
+    if (!status_error && std::filesystem::is_symlink(existing_status)) {
+      throw std::runtime_error("report path must not be a symbolic link: " + path.string());
+    }
+
 #ifdef _WIN32
     const auto native_path = path.string();
     HANDLE handle = ::CreateFileA(native_path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
