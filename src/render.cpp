@@ -29,6 +29,25 @@ public:
   }
 };
 
+void write_document(ftxui::Element document, std::ostream& out) {
+  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
+  ftxui::Render(screen, document);
+  out << screen.ToString() << '\n';
+}
+
+[[nodiscard]] auto command_row(std::string command, std::string detail) -> ftxui::Element {
+  return ftxui::hbox({
+             ftxui::text("  "),
+             ftxui::text(std::move(command)) | ftxui::bold | ftxui::color(ftxui::Color::Cyan),
+             ftxui::text("  "),
+             ftxui::text(std::move(detail)) | ftxui::color(ftxui::Color::GrayLight),
+         });
+}
+
+[[nodiscard]] auto panel_title(std::string title) -> ftxui::Element {
+  return ftxui::text(std::move(title)) | ftxui::bold | ftxui::color(ftxui::Color::Green);
+}
+
 [[nodiscard]] auto progress_bar(double value, double max_value) -> std::string {
   constexpr auto width = 18;
   const auto ratio = max_value <= 0.0 ? 0.0 : std::clamp(value / max_value, 0.0, 1.0);
@@ -82,9 +101,7 @@ public:
             ftxui::gauge(1.0F) | ftxui::color(ftxui::Color::Green),
         }),
     });
-    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
-    ftxui::Render(screen, document);
-    out << screen.ToString() << '\n';
+    write_document(document, out);
   }
 
 private:
@@ -391,6 +408,34 @@ void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, Out
   render_rows(SubscriptionAliasRowsView(rows), format, out);
 }
 
+void render_help_screen(std::ostream& out) {
+  auto document = ftxui::vbox({
+                      panel_title("azdash command center"),
+                      ftxui::separator(),
+                      ftxui::text("Usage:") | ftxui::bold | ftxui::color(ftxui::Color::White),
+                      command_row("azdash cost", "current vs previous spend"),
+                      command_row("azdash trend [services...]", "six-month spend trend"),
+                      command_row("azdash waste [checks...]", "advisor and waste signals"),
+                      command_row("azdash report cost|trend|waste --path <path>", "write PDF reports"),
+                      command_row("azdash alias-sub set <alias> <subscription>", "save a subscription alias"),
+                      command_row("azdash alias-sub list", "show configured aliases"),
+                      command_row("azdash version", "show release banner"),
+                      command_row("azdash update", "show upgrade commands"),
+                      ftxui::separator(),
+                      ftxui::text("Global flags:") | ftxui::bold | ftxui::color(ftxui::Color::White),
+                      command_row("--subscription <id-name-or-alias>", "Azure subscription selector"),
+                      command_row("-o, --output <table|json|csv>", "table is styled; json/csv stay script-safe"),
+                      command_row("--path <file-or-directory>", "PDF output destination"),
+                      ftxui::separator(),
+                      ftxui::text("Waste checks: advisor compute network storage appservice database") |
+                          ftxui::color(ftxui::Color::Yellow),
+                      ftxui::text("              containers keyvault") |
+                          ftxui::color(ftxui::Color::Yellow),
+                  }) |
+                  ftxui::border | ftxui::color(ftxui::Color::Green);
+  write_document(document, out);
+}
+
 void render_version(std::ostream& out) {
   constexpr auto banner =
       "    _    _________     _    ____  _   _ \n"
@@ -412,9 +457,58 @@ void render_version(std::ostream& out) {
       ftxui::hbox({ftxui::text(" Config:  "), ftxui::text("subscription aliases enabled")}),
   }) | ftxui::border | ftxui::color(ftxui::Color::Green);
 
-  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
-  ftxui::Render(screen, document);
-  out << screen.ToString() << '\n';
+  write_document(document, out);
+}
+
+void render_update_guidance(std::ostream& out) {
+  auto document = ftxui::vbox({
+                      panel_title("azdash update"),
+                      ftxui::separator(),
+                      ftxui::text("Recommended upgrade paths") | ftxui::bold | ftxui::color(ftxui::Color::White),
+                      command_row("vcpkg update && vcpkg upgrade az-dashboard", "refresh a vcpkg install"),
+                      command_row("docker pull <registry>/azdash:latest", "refresh container deployments"),
+                      command_row("git pull && cmake --build build", "refresh local source builds"),
+                      ftxui::separator(),
+                      ftxui::hbox({
+                          ftxui::text("status ") | ftxui::color(ftxui::Color::Green),
+                          ftxui::gauge(1.0F) | ftxui::color(ftxui::Color::Green),
+                      }),
+                  }) |
+                  ftxui::border | ftxui::color(ftxui::Color::Cyan);
+  write_document(document, out);
+}
+
+void render_success(const std::string& title, const std::string& detail, std::ostream& out) {
+  auto document = ftxui::vbox({
+                      ftxui::hbox({
+                          ftxui::text("OK ") | ftxui::bold | ftxui::color(ftxui::Color::Green),
+                          ftxui::text(title) | ftxui::bold | ftxui::color(ftxui::Color::White),
+                      }),
+                      ftxui::separator(),
+                      ftxui::paragraph(detail) | ftxui::color(ftxui::Color::GrayLight),
+                      ftxui::hbox({
+                          ftxui::text("complete ") | ftxui::color(ftxui::Color::Green),
+                          ftxui::gauge(1.0F) | ftxui::color(ftxui::Color::Green),
+                      }),
+                  }) |
+                  ftxui::border | ftxui::color(ftxui::Color::Green);
+  write_document(document, out);
+}
+
+void render_error(const std::string& message, std::ostream& out) {
+  auto document = ftxui::vbox({
+                      ftxui::hbox({
+                          ftxui::text("ERROR ") | ftxui::bold | ftxui::color(ftxui::Color::Red),
+                          ftxui::text("azdash") | ftxui::bold | ftxui::color(ftxui::Color::White),
+                      }),
+                      ftxui::separator(),
+                      ftxui::paragraph(message) | ftxui::color(ftxui::Color::Yellow),
+                      ftxui::separator(),
+                      ftxui::text("Run azdash --help for available commands.") |
+                          ftxui::color(ftxui::Color::GrayLight),
+                  }) |
+                  ftxui::border | ftxui::color(ftxui::Color::Red);
+  write_document(document, out);
 }
 
 } // namespace azdash

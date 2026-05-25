@@ -321,7 +321,7 @@ TEST(CliTest, DispatchesReportThroughInjectedReportWriter) {
   EXPECT_EQ(fake.write_trend_calls, 1);
   EXPECT_EQ(fake.last_report_path, std::filesystem::path("trend.pdf"));
   EXPECT_EQ(fake.last_trend_report_row_count, 1);
-  EXPECT_NE(fake.out.str().find("Report written to trend.pdf"), std::string::npos);
+  EXPECT_NE(fake.out.str().find("Trend report written to trend.pdf"), std::string::npos);
 }
 
 TEST(AzureCliDateTest, ClampsComparableDayToPreviousMonthEnd) {

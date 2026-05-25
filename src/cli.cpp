@@ -172,7 +172,7 @@ private:
     } else if (command == "update") {
       options.command = CommandKind::Update;
       parse_flags_only(options, args, index, "update");
-  } else if (command == "report") {
+    } else if (command == "report") {
       parse_report_command(options, args, index);
     } else if (command == "alias-sub") {
       parse_alias_sub_command(options, args, index);
@@ -370,7 +370,7 @@ auto execute_cost_report(const CliOptions& options, const CliRuntime& runtime, c
                                   runtime.cost_provider.previous_month_costs(resolved_options));
   const auto path = runtime.report_writer.resolve_path(options.report_path, "azdash-cost.pdf");
   runtime.report_writer.write_cost(path, account, rows);
-  runtime.out << "Report written to " << path.string() << '\n';
+  render_success("Report written", "Cost report written to " + path.string(), runtime.out);
   return 0;
 }
 
@@ -379,7 +379,7 @@ auto execute_trend_report(const CliOptions& options, const CliRuntime& runtime, 
   const auto rows = runtime.trend_provider.six_month_trends(resolved_options);
   const auto path = runtime.report_writer.resolve_path(options.report_path, "azdash-trend.pdf");
   runtime.report_writer.write_trend(path, account, rows);
-  runtime.out << "Report written to " << path.string() << '\n';
+  render_success("Report written", "Trend report written to " + path.string(), runtime.out);
   return 0;
 }
 
@@ -388,7 +388,7 @@ auto execute_waste_report(const CliOptions& options, const CliRuntime& runtime, 
   const auto rows = runtime.waste_provider.waste_findings(resolved_options);
   const auto path = runtime.report_writer.resolve_path(options.report_path, "azdash-waste.pdf");
   runtime.report_writer.write_waste(path, account, rows);
-  runtime.out << "Report written to " << path.string() << '\n';
+  render_success("Report written", "Waste report written to " + path.string(), runtime.out);
   return 0;
 }
 
@@ -396,14 +396,14 @@ auto execute_alias_sub(const CliOptions& options, const CliRuntime& runtime) -> 
   switch (options.alias_action) {
   case AliasSubAction::Set:
     runtime.alias_store.set(options.alias_name, options.alias_subscription);
-    runtime.out << "alias-sub '" << options.alias_name << "' saved\n";
+    render_success("Alias saved", "alias-sub '" + options.alias_name + "' is ready for --subscription", runtime.out);
     return 0;
   case AliasSubAction::Remove:
     if (runtime.alias_store.remove(options.alias_name)) {
-      runtime.out << "alias-sub '" << options.alias_name << "' removed\n";
+      render_success("Alias removed", "alias-sub '" + options.alias_name + "' was removed", runtime.out);
       return 0;
     }
-    runtime.err << "error: alias-sub not found: " << options.alias_name << '\n';
+    render_error("alias-sub not found: " + options.alias_name, runtime.err);
     return 1;
   case AliasSubAction::List:
     render_subscription_aliases(runtime.alias_store.list(), options.output, runtime.out);
@@ -461,7 +461,7 @@ public:
 
   auto execute(const CliOptions& options) const -> int {
     if (options.command == CommandKind::Help) {
-      runtime_.out << help_text();
+      render_help_screen(runtime_.out);
       return 0;
     }
 
@@ -471,8 +471,7 @@ public:
     }
 
     if (options.command == CommandKind::Update) {
-      runtime_.out << "Install the latest release with vcpkg, Docker, or the repository release artifacts.\n";
-      runtime_.out << "vcpkg update && vcpkg upgrade az-dashboard\n";
+      render_update_guidance(runtime_.out);
       return 0;
     }
 
@@ -490,7 +489,7 @@ public:
       return workflow->execute(options, runtime_, account);
     }
 
-    runtime_.out << help_text();
+    render_help_screen(runtime_.out);
     return 0;
   }
 
@@ -516,7 +515,7 @@ auto run(const CliOptions& options, const CliRuntime& runtime) -> int {
   try {
     return CommandDispatcher(runtime).execute(options);
   } catch (const std::exception& error) {
-    runtime.err << "error: " << error.what() << '\n';
+    render_error(error.what(), runtime.err);
     return 1;
   }
 }
