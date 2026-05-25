@@ -113,7 +113,8 @@ private:
   [[nodiscard]] static auto contains_symlink_component(const std::filesystem::path& path,
                                                        const std::filesystem::path& root) -> bool {
     const auto relative = path.lexically_relative(root);
-    if (relative.empty() || relative.native().starts_with("..")) {
+    if (relative.empty() || relative.is_absolute() ||
+        (!relative.empty() && *relative.begin() == std::filesystem::path(".."))) {
       return true;
     }
 
