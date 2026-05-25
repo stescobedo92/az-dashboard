@@ -4,7 +4,6 @@
 
 #include <array>
 #include <chrono>
-#include <cstdio>
 #include <ctime>
 #include <iomanip>
 #include <memory>
@@ -14,52 +13,20 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace azdash {
+namespace detail {
+
+auto civil_date_for_month(std::chrono::year_month_day anchor, int month_offset, bool month_start) -> std::string;
+
+} // namespace detail
+
 namespace {
 
-auto quote(std::string value) -> std::string {
-  constexpr std::string_view unsafe_shell_chars{"\"\r\n&|;<>(){}[]`$\\!%"};
-  if (value.find_first_of(unsafe_shell_chars) != std::string::npos) {
-    throw std::invalid_argument("CLI argument contains unsafe shell characters");
-  }
+constexpr std::string_view kRedacted{"<redacted>"};
 
-  std::string escaped = "\"";
-  for (const auto c : value) {
-    escaped += c;
-  }
-  escaped += '"';
-  return escaped;
-}
-
-auto read_pipe(const std::string& command) -> CommandResult {
-  std::array<char, 4096> buffer{};
-  std::string output;
-
-#ifdef _WIN32
-  auto* pipe = _popen(command.c_str(), "r");
-#else
-  auto* pipe = popen(command.c_str(), "r");
-#endif
-
-  if (pipe == nullptr) {
-    return {1, "", "failed to open process"};
-  }
-
-  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-    output += buffer.data();
-  }
-
-#ifdef _WIN32
-  const auto exit_code = _pclose(pipe);
-#else
-  const auto exit_code = pclose(pipe);
-#endif
-
-  return {exit_code, output, ""};
-}
-
-auto civil_date(int month_offset, bool month_start) -> std::string {
+auto current_local_date() -> std::chrono::year_month_day {
   const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::tm local{};
 #ifdef _WIN32
@@ -67,32 +34,31 @@ auto civil_date(int month_offset, bool month_start) -> std::string {
 #else
   localtime_r(&now, &local);
 #endif
-  local.tm_mon += month_offset;
-  if (month_start) {
-    local.tm_mday = 1;
-  }
-  std::mktime(&local);
+  return std::chrono::year{local.tm_year + 1900} / std::chrono::month{static_cast<unsigned>(local.tm_mon + 1)} /
+         std::chrono::day{static_cast<unsigned>(local.tm_mday)};
+}
 
+auto format_date(const std::chrono::year_month_day& date) -> std::string {
   std::ostringstream out;
-  out << std::put_time(&local, "%Y-%m-%d");
+  out << std::setfill('0') << std::setw(4) << static_cast<int>(date.year()) << '-' << std::setw(2)
+      << static_cast<unsigned>(date.month()) << '-' << std::setw(2) << static_cast<unsigned>(date.day());
   return out.str();
+}
+
+auto target_month(std::chrono::year_month_day anchor, int month_offset) -> std::chrono::year_month {
+  return std::chrono::year_month{anchor.year(), anchor.month()} + std::chrono::months{month_offset};
 }
 
 auto month_label(int month_offset) -> std::string {
-  const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-  std::tm local{};
-#ifdef _WIN32
-  localtime_s(&local, &now);
-#else
-  localtime_r(&now, &local);
-#endif
-  local.tm_mon += month_offset;
-  local.tm_mday = 1;
-  std::mktime(&local);
-
+  const auto month = target_month(current_local_date(), month_offset);
   std::ostringstream out;
-  out << std::put_time(&local, "%Y-%m");
+  out << std::setfill('0') << std::setw(4) << static_cast<int>(month.year()) << '-' << std::setw(2)
+      << static_cast<unsigned>(month.month());
   return out.str();
+}
+
+auto civil_date(int month_offset, bool month_start) -> std::string {
+  return detail::civil_date_for_month(current_local_date(), month_offset, month_start);
 }
 
 auto json_string(const nlohmann::json& object, std::initializer_list<const char*> keys) -> std::string {
@@ -225,11 +191,150 @@ auto append_vm_heuristics(const nlohmann::json& payload, std::vector<WasteFindin
   }
 }
 
+using WasteDetector = void (*)(const nlohmann::json&, std::vector<WasteFinding>&);
+
+struct WasteScan final {
+  ProcessCommand command;
+  WasteDetector detect;
+};
+
+auto sensitive_argument_values(const ProcessCommand& command) -> std::vector<std::string> {
+  std::vector<std::string> values;
+  for (auto index = std::size_t{0}; index + 1 < command.arguments.size(); ++index) {
+    if (command.arguments[index] == "--subscription" || command.arguments[index] == "--tenant") {
+      values.push_back(command.arguments[index + 1]);
+    }
+  }
+  return values;
+}
+
+auto redact_text(std::string text, const ProcessCommand& command) -> std::string {
+  for (const auto& value : sensitive_argument_values(command)) {
+    if (value.empty()) {
+      continue;
+    }
+    auto position = std::size_t{0};
+    while ((position = text.find(value, position)) != std::string::npos) {
+      text.replace(position, value.size(), kRedacted);
+      position += kRedacted.size();
+    }
+  }
+  return text;
+}
+
+auto command_summary(const ProcessCommand& command) -> std::string {
+  std::string summary = command.executable.empty() ? "<missing-executable>" : command.executable;
+  auto redact_next = false;
+  for (const auto& argument : command.arguments) {
+    summary += ' ';
+    if (redact_next) {
+      summary += kRedacted;
+      redact_next = false;
+      continue;
+    }
+    summary += argument;
+    redact_next = argument == "--subscription" || argument == "--tenant";
+  }
+  return summary;
+}
+
+auto append_process_output(std::ostringstream& message, const ProcessCommand& command, const CommandResult& result)
+    -> void {
+  if (!result.stdout_text.empty()) {
+    message << "\nstdout: " << redact_text(result.stdout_text, command);
+  }
+  if (!result.stderr_text.empty()) {
+    message << "\nstderr: " << redact_text(result.stderr_text, command);
+  }
+}
+
+class AzureCommandBuilder final {
+public:
+  explicit AzureCommandBuilder(const CliOptions& options) : options_(options) {}
+
+  [[nodiscard]] auto account_show() const -> ProcessCommand {
+    return build({"account", "show"});
+  }
+
+  [[nodiscard]] auto consumption_usage(std::string start_date, std::string end_date) const -> ProcessCommand {
+    return build({"consumption", "usage", "list", "--start-date", std::move(start_date), "--end-date",
+                  std::move(end_date)});
+  }
+
+  [[nodiscard]] auto advisor_cost_recommendations() const -> ProcessCommand {
+    return build({"advisor", "recommendation", "list", "--category", "Cost"});
+  }
+
+  [[nodiscard]] auto resource_list() const -> ProcessCommand {
+    return build({"resource", "list"});
+  }
+
+  [[nodiscard]] auto vm_list_with_power_state() const -> ProcessCommand {
+    return build({"vm", "list", "-d"});
+  }
+
+private:
+  const CliOptions& options_;
+
+  [[nodiscard]] auto build(std::vector<std::string> arguments) const -> ProcessCommand {
+    if (!options_.subscription.empty()) {
+      arguments.emplace_back("--subscription");
+      arguments.push_back(options_.subscription);
+    }
+    if (!options_.tenant.empty()) {
+      arguments.emplace_back("--tenant");
+      arguments.push_back(options_.tenant);
+    }
+    arguments.emplace_back("-o");
+    arguments.emplace_back("json");
+    return {"az", std::move(arguments)};
+  }
+};
+
+class AzureJsonCommandExecutor final {
+public:
+  explicit AzureJsonCommandExecutor(const ICommandRunner& runner) : runner_(runner) {}
+
+  [[nodiscard]] auto run(const ProcessCommand& command) const -> nlohmann::json {
+    const auto result = runner_.run(command);
+    if (result.exit_code != 0) {
+      std::ostringstream message;
+      message << "Azure CLI command failed (" << command_summary(command) << "): exit code " << result.exit_code;
+      if (result.timed_out) {
+        message << " after timeout";
+      }
+      append_process_output(message, command, result);
+      throw std::runtime_error(message.str());
+    }
+    try {
+      return nlohmann::json::parse(result.stdout_text.empty() ? "null" : result.stdout_text);
+    } catch (const nlohmann::json::exception& error) {
+      std::ostringstream message;
+      message << "Azure CLI returned invalid JSON (" << command_summary(command) << "): " << error.what();
+      throw std::runtime_error(message.str());
+    }
+  }
+
+private:
+  const ICommandRunner& runner_;
+};
+
 } // namespace
 
-auto ShellCommandRunner::run(const std::string& command) const -> CommandResult {
-  return read_pipe(command);
+namespace detail {
+
+auto civil_date_for_month(std::chrono::year_month_day anchor, int month_offset, bool month_start) -> std::string {
+  const auto month = target_month(anchor, month_offset);
+  if (month_start) {
+    return format_date(month / std::chrono::day{1});
+  }
+
+  const auto last_day = std::chrono::year_month_day{month / std::chrono::last}.day();
+  const auto day = anchor.day() > last_day ? last_day : anchor.day();
+  return format_date(month / day);
 }
+
+} // namespace detail
 
 AzureCliClient::AzureCliClient(std::shared_ptr<ICommandRunner> runner) : runner_(std::move(runner)) {
   if (!runner_) {
@@ -237,32 +342,10 @@ AzureCliClient::AzureCliClient(std::shared_ptr<ICommandRunner> runner) : runner_
   }
 }
 
-auto AzureCliClient::az_base(const CliOptions& options) const -> std::string {
-  (void)options;
-  return "az";
-}
-
-auto AzureCliClient::subscription_arg(const CliOptions& options) const -> std::string {
-  if (!options.subscription.empty()) {
-    return " --subscription " + quote(options.subscription);
-  }
-  return "";
-}
-
-auto AzureCliClient::run_json(const std::string& command) const -> nlohmann::json {
-  const auto result = runner_->run(command);
-  if (result.exit_code != 0) {
-    throw std::runtime_error("Azure CLI command failed: " + command + "\n" + result.stdout_text + result.stderr_text);
-  }
-  try {
-    return nlohmann::json::parse(result.stdout_text.empty() ? "null" : result.stdout_text);
-  } catch (const nlohmann::json::exception& error) {
-    throw std::runtime_error("Azure CLI returned invalid JSON for command: " + command + "\n" + error.what());
-  }
-}
-
 auto AzureCliClient::account(const CliOptions& options) const -> AccountInfo {
-  const auto payload = run_json(az_base(options) + " account show" + subscription_arg(options) + " -o json");
+  const AzureCommandBuilder commands{options};
+  const AzureJsonCommandExecutor executor{*runner_};
+  const auto payload = executor.run(commands.account_show());
   return {
       json_string(payload, {"id"}),
       json_string(payload, {"name"}),
@@ -272,28 +355,31 @@ auto AzureCliClient::account(const CliOptions& options) const -> AccountInfo {
 }
 
 auto AzureCliClient::current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> {
+  const AzureCommandBuilder commands{options};
+  const AzureJsonCommandExecutor executor{*runner_};
   const auto start = civil_date(0, true);
   const auto end = civil_date(0, false);
-  const auto payload = run_json(az_base(options) + " consumption usage list --start-date " + quote(start) +
-                                " --end-date " + quote(end) + subscription_arg(options) + " -o json");
+  const auto payload = executor.run(commands.consumption_usage(start, end));
   return parse_usage_costs(payload);
 }
 
 auto AzureCliClient::previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> {
+  const AzureCommandBuilder commands{options};
+  const AzureJsonCommandExecutor executor{*runner_};
   const auto start = civil_date(-1, true);
   const auto end = civil_date(-1, false);
-  const auto payload = run_json(az_base(options) + " consumption usage list --start-date " + quote(start) +
-                                " --end-date " + quote(end) + subscription_arg(options) + " -o json");
+  const auto payload = executor.run(commands.consumption_usage(start, end));
   return parse_usage_costs(payload);
 }
 
 auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> {
+  const AzureCommandBuilder commands{options};
+  const AzureJsonCommandExecutor executor{*runner_};
   std::vector<MonthCost> trends;
   for (auto offset = -5; offset <= 0; ++offset) {
     const auto start = civil_date(offset, true);
     const auto end = offset == 0 ? civil_date(0, false) : civil_date(offset + 1, true);
-    const auto payload = run_json(az_base(options) + " consumption usage list --start-date " + quote(start) +
-                                  " --end-date " + quote(end) + subscription_arg(options) + " -o json");
+    const auto payload = executor.run(commands.consumption_usage(start, end));
     auto services = parse_usage_costs(payload);
     services = filter_selected(services, options.selectors, [](const ServiceCost& cost) { return cost.service; });
     trends.push_back({month_label(offset), total_cost(services), services});
@@ -302,14 +388,18 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
 }
 
 auto AzureCliClient::waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> {
+  const AzureCommandBuilder commands{options};
+  const AzureJsonCommandExecutor executor{*runner_};
   std::vector<WasteFinding> findings;
 
-  append_advisor_findings(
-      run_json(az_base(options) + " advisor recommendation list --category Cost" + subscription_arg(options) + " -o json"),
-      findings);
-  append_resource_heuristics(run_json(az_base(options) + " resource list" + subscription_arg(options) + " -o json"),
-                             findings);
-  append_vm_heuristics(run_json(az_base(options) + " vm list -d" + subscription_arg(options) + " -o json"), findings);
+  const std::array scans{
+      WasteScan{commands.advisor_cost_recommendations(), append_advisor_findings},
+      WasteScan{commands.resource_list(), append_resource_heuristics},
+      WasteScan{commands.vm_list_with_power_state(), append_vm_heuristics},
+  };
+  for (const auto& scan : scans) {
+    scan.detect(executor.run(scan.command), findings);
+  }
 
   return filter_selected(findings, options.selectors, [](const WasteFinding& finding) { return finding.check; });
 }

@@ -24,10 +24,36 @@ The implementation is intentionally layered:
 - Extra Azure heuristics for unattached managed disks, orphan public IPs, old
   snapshots, and stopped or deallocated virtual machines.
 - Selective scans by check name, for example `compute network advisor`.
+- Local subscription aliases through `alias-sub` so long subscription IDs can be
+  referenced by short names in later commands.
 - Output formats: `table`, `json`, and `csv`.
+- Styled terminal tables with colors and inline progress bars for table output.
 - PDF reports for cost, trend, and waste workflows.
 - CMake, vcpkg manifest mode, Docker, CI build/test, and vcpkg port publishing
   workflow.
+
+## Screenshots
+
+The terminal UI is rendered with FTXUI for styled command panels, tables,
+progress bars, success states, and errors. JSON and CSV output remain plain for
+scripts.
+
+![azdash version banner](assets/screenshots/version.png)
+
+![azdash help command center](assets/screenshots/help.png)
+
+![azdash cost table](assets/screenshots/cost.png)
+
+![azdash trend table](assets/screenshots/trend.png)
+
+![azdash waste table](assets/screenshots/waste.png)
+
+![azdash subscription alias table](assets/screenshots/alias-list.png)
+
+![azdash PDF report success](assets/screenshots/report-cost.png)
+
+More public-safe examples are available in `assets/screenshots`, including
+alias lifecycle commands, update guidance, report generation, and error states.
 
 ## Requirements
 
@@ -56,7 +82,7 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 docker build -t azdash .
-docker run --rm -it -v "$HOME/.azure:/root/.azure" azdash cost
+docker run --rm -it -v "$HOME/.azure:/home/azdash/.azure:ro" azdash cost
 ```
 
 ## Usage
@@ -69,7 +95,12 @@ azdash cost
 azdash --output json cost
 azdash --output csv waste advisor compute
 
-# Use a specific subscription
+# Create and use a local subscription alias
+azdash alias-sub set prod "00000000-0000-0000-0000-000000000000"
+azdash --subscription prod cost
+azdash alias-sub list
+
+# Use a specific subscription directly
 azdash --subscription "00000000-0000-0000-0000-000000000000" trend
 
 # Trend for selected services
@@ -88,5 +119,3 @@ azdash report waste compute network --path ./reports/waste.pdf
 azdash version
 azdash update
 ```
-4. Add focused GTest coverage for parsing, filtering, and rendering behavior.
-5. Document public methods with C++ documentation comments.

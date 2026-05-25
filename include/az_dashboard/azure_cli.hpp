@@ -2,50 +2,59 @@
 
 #include "az_dashboard/models.hpp"
 
-#include <filesystem>
 #include <memory>
-#include <nlohmann/json_fwd.hpp>
-#include <string>
 #include <vector>
 
 namespace azdash {
 
 /**
- * @brief Abstract process runner used to isolate shell execution from Azure parsing logic.
+ * @brief Abstract process runner used to isolate process execution from Azure parsing logic.
+ *
+ * Implementations receive typed executable/argument data assembled by AzureCliClient.
  */
 class ICommandRunner {
 public:
   virtual ~ICommandRunner() = default;
 
   /**
-   * @brief Executes a command and captures the process output.
-   * @param command Full command line to execute.
-   * @return Process exit code and captured output.
+   * @brief Executes a typed command and captures the process output.
+   * @param command Executable and argv-style arguments to execute.
+   * @param options Runner options such as timeout.
+   * @return Process exit code plus captured stdout and stderr text.
    */
-  [[nodiscard]] virtual auto run(const std::string& command) const -> CommandResult = 0;
+  [[nodiscard]] virtual auto run(const ProcessCommand& command,
+                                 const ProcessRunnerOptions& options = {}) const -> CommandResult = 0;
 };
 
 /**
- * @brief Cross-platform shell command runner based on popen.
+ * @brief Cross-platform command runner.
+ *
+ * POSIX implementations execute without a shell and capture stdout/stderr separately.
  */
 class ShellCommandRunner final : public ICommandRunner {
 public:
   /**
-   * @brief Executes a command through the platform shell.
-   * @param command Full command line to execute.
-   * @return Process exit code and captured stdout.
+   * @brief Executes a typed command.
+   * @param command Executable and argv-style arguments to execute.
+   * @param options Runner options such as timeout.
+   * @return Process exit code and captured stdout/stderr where supported.
    */
-  [[nodiscard]] auto run(const std::string& command) const -> CommandResult override;
+  [[nodiscard]] auto run(const ProcessCommand& command, const ProcessRunnerOptions& options = {}) const
+      -> CommandResult override;
 };
 
 /**
  * @brief Azure data provider implemented through the Azure CLI.
+ *
+ * User-controlled subscription and tenant values are passed as typed argv
+ * arguments. Azure CLI failures or invalid JSON are reported as exceptions with
+ * sensitive selectors redacted from command summaries.
  */
 class AzureCliClient {
 public:
   /**
    * @brief Creates a client with a process runner.
-   * @param runner Runner used for Azure CLI commands.
+   * @param runner Runner used for Azure CLI commands; must not be null.
    */
   explicit AzureCliClient(std::shared_ptr<ICommandRunner> runner);
 
@@ -86,10 +95,6 @@ public:
 
 private:
   std::shared_ptr<ICommandRunner> runner_;
-
-  [[nodiscard]] auto az_base(const CliOptions& options) const -> std::string;
-  [[nodiscard]] auto subscription_arg(const CliOptions& options) const -> std::string;
-  [[nodiscard]] auto run_json(const std::string& command) const -> nlohmann::json;
 };
 
 } // namespace azdash

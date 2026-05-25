@@ -1,4 +1,5 @@
 #include "az_dashboard/cli.hpp"
+#include "az_dashboard/render.hpp"
 
 #include <span>
 #include <iostream>
@@ -17,7 +18,8 @@ auto main(int argc, char** argv) -> int {
     const auto options = azdash::parse_args(std::span<const std::string>(args.data(), args.size()));
     return azdash::run(options);
   } catch (const std::exception& error) {
-    std::cerr << "error: " << error.what() << "\n\n" << azdash::help_text();
+    azdash::render_error(error.what(), std::cerr);
+    azdash::render_help_screen(std::cerr);
     return 1;
   }
 }
