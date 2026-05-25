@@ -1,7 +1,7 @@
 {
-  "name": "az-dashboard",
+  "name": "stescobedo92-azdash",
   "version-string": "@VERSION@",
-  "description": "Azure cost, trend, and waste diagnostics CLI built with modern C++23 and FTXUI.",
+  "description": "azdash is an Azure-focused C++23 CLI for Azure spending, six-month cost trends, and waste signals, rendered with FTXUI tables, JSON, CSV, or PDF reports.",
   "homepage": "https://github.com/@REPOSITORY@",
   "license": "MIT",
   "dependencies": [

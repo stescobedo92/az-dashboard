@@ -1,0 +1,179 @@
+name: Publish winget manifest
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without leading v
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  PACKAGE_IDENTIFIER: stescobedo92.azdash
+  PACKAGE_NAME: azdash
+  WINGET_FORK: stescobedo92/winget-pkgs
+  WINGET_UPSTREAM: microsoft/winget-pkgs
+
+jobs:
+  publish-winget:
+    runs-on: windows-latest
+    env:
+      WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+    steps:
+      - name: Resolve release metadata
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.inputs.version || github.event.release.tag_name }}".TrimStart("v")
+          if ($version -notmatch '^[0-9]+([.][0-9]+){0,3}([-+][A-Za-z0-9._-]+)?$') {
+            throw "Invalid version: $version"
+          }
+          $tag = "v$version"
+          $asset = "azdash-windows-x64.zip"
+          $url = "https://github.com/${env:GITHUB_REPOSITORY}/releases/download/$tag/$asset"
+          Invoke-WebRequest -Uri $url -OutFile $asset
+          $sha = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToUpperInvariant()
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "TAG=$tag" >> $env:GITHUB_ENV
+          "INSTALLER_URL=$url" >> $env:GITHUB_ENV
+          "INSTALLER_SHA256=$sha" >> $env:GITHUB_ENV
+          "BRANCH=azdash-$version" >> $env:GITHUB_ENV
+
+      - name: Stop when winget token is missing
+        if: env.WINGET_TOKEN == ''
+        shell: pwsh
+        run: |
+          Write-Error "WINGET_TOKEN is required to push to ${env:WINGET_FORK} and open a PR to ${env:WINGET_UPSTREAM}."
+
+      - name: Checkout winget fork
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ env.WINGET_FORK }}
+          token: ${{ secrets.WINGET_TOKEN }}
+          path: winget-pkgs
+          fetch-depth: 0
+
+      - name: Sync with upstream master
+        shell: pwsh
+        working-directory: winget-pkgs
+        run: |
+          git remote add upstream "https://github.com/${env:WINGET_UPSTREAM}.git"
+          git fetch upstream master
+          git checkout -B $env:BRANCH upstream/master
+
+      - name: Render winget manifests
+        shell: pwsh
+        working-directory: winget-pkgs
+        run: |
+          $manifestDir = "manifests/s/stescobedo92/azdash/$env:VERSION"
+          New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+          PackageIdentifier: $env:PACKAGE_IDENTIFIER
+          PackageVersion: $env:VERSION
+          DefaultLocale: en-US
+          ManifestType: version
+          ManifestVersion: 1.6.0
+          "@ | Set-Content -Encoding utf8 "$manifestDir/$env:PACKAGE_IDENTIFIER.yaml"
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+          PackageIdentifier: $env:PACKAGE_IDENTIFIER
+          PackageVersion: $env:VERSION
+          PackageLocale: en-US
+          Publisher: Sergio Triana Escobedo
+          PublisherUrl: https://github.com/stescobedo92
+          Author: Sergio Triana Escobedo
+          PackageName: azdash
+          Moniker: azdash
+          PackageUrl: https://github.com/${env:GITHUB_REPOSITORY}
+          License: MIT
+          LicenseUrl: https://github.com/${env:GITHUB_REPOSITORY}/blob/master/LICENSE
+          ShortDescription: Azure cost, trend, and waste diagnostics CLI.
+          Description: azdash is an Azure-focused C++23 CLI for Azure spending, six-month cost trends, and waste signals, rendered with FTXUI tables, JSON, CSV, or PDF reports.
+          Tags:
+            - azure
+            - costs
+            - dashboard
+            - cli
+            - tui
+          ManifestType: defaultLocale
+          ManifestVersion: 1.6.0
+          "@ | Set-Content -Encoding utf8 "$manifestDir/$env:PACKAGE_IDENTIFIER.locale.en-US.yaml"
+          @"
+          # yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+          PackageIdentifier: $env:PACKAGE_IDENTIFIER
+          PackageVersion: $env:VERSION
+          MinimumOSVersion: 10.0.17763.0
+          InstallerType: zip
+          NestedInstallerType: portable
+          NestedInstallerFiles:
+            - RelativeFilePath: azdash.exe
+              PortableCommandAlias: azdash
+          Installers:
+            - Architecture: x64
+              InstallerUrl: $env:INSTALLER_URL
+              InstallerSha256: $env:INSTALLER_SHA256
+          ManifestType: installer
+          ManifestVersion: 1.6.0
+          "@ | Set-Content -Encoding utf8 "$manifestDir/$env:PACKAGE_IDENTIFIER.installer.yaml"
+
+      - name: Validate manifest
+        shell: pwsh
+        working-directory: winget-pkgs
+        run: |
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget validate "manifests/s/stescobedo92/azdash/$env:VERSION"
+          } else {
+            Write-Warning "winget is not available on this runner; GitHub's winget-pkgs validation will validate the PR."
+          }
+
+      - name: Commit and push manifest
+        shell: pwsh
+        working-directory: winget-pkgs
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add "manifests/s/stescobedo92/azdash/$env:VERSION"
+          if ((git diff --cached --quiet; $LASTEXITCODE) -eq 0) {
+            Write-Host "winget manifest already up to date."
+            exit 0
+          }
+          git commit -m "New package: $env:PACKAGE_IDENTIFIER version $env:VERSION"
+          git push --force-with-lease origin $env:BRANCH
+
+      - name: Open pull request
+        shell: pwsh
+        working-directory: winget-pkgs
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          $existing = gh pr list --repo $env:WINGET_UPSTREAM --head "stescobedo92:$env:BRANCH" --json url --jq ".[0].url"
+          if ($existing) {
+            Write-Host "Existing PR: $existing"
+            exit 0
+          }
+          $body = @"
+          ### New package submission
+
+          - **PackageIdentifier:** $env:PACKAGE_IDENTIFIER
+          - **PackageVersion:** $env:VERSION
+          - **PackageUrl:** https://github.com/${env:GITHUB_REPOSITORY}
+          - **License:** MIT
+          - **Description:** Azure cost, trend, and waste diagnostics CLI.
+
+          ### Checklist
+
+          - [x] Have you signed the [Contributor License Agreement](https://cla.opensource.microsoft.com/microsoft/winget-pkgs)?
+          - [x] Have you checked that there aren't other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls?q=is%3Apr+$env:PACKAGE_IDENTIFIER) for the same manifest update/change?
+          - [x] This PR only modifies one (1) manifest
+          - [x] Does your manifest conform to the 1.6 schema?
+          "@
+          gh pr create `
+            --repo $env:WINGET_UPSTREAM `
+            --base master `
+            --head "stescobedo92:$env:BRANCH" `
+            --title "New package: $env:PACKAGE_IDENTIFIER version $env:VERSION" `
+            --body $body

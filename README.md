@@ -1,5 +1,12 @@
 # azdash
 
+[![CI](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml/badge.svg?branch=feature/az-dashboard-hardening)](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml)
+[![RELEASE](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml)
+[![NPM](https://github.com/stescobedo92/az-dashboard/actions/workflows/npm-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/npm-publish.yml)
+[![BREW](https://github.com/stescobedo92/az-dashboard/actions/workflows/homebrew-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/homebrew-publish.yml)
+[![VCPKG](https://github.com/stescobedo92/az-dashboard/actions/workflows/vcpkg-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/vcpkg-publish.yml)
+[![WINGET](https://github.com/stescobedo92/az-dashboard/actions/workflows/winget-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/winget-publish.yml)
+
 `azdash` is an Azure-focused C++23 CLI. It audits Azure spending,
 Six-month cost trends, and waste signals from Azure Advisor, plus resource
 heuristics, then renders the results as an FTXUI table, JSON, CSV, or a PDF
@@ -29,8 +36,53 @@ The implementation is intentionally layered:
 - Output formats: `table`, `json`, and `csv`.
 - Styled terminal tables with colors and inline progress bars for table output.
 - PDF reports for cost, trend, and waste workflows.
-- CMake, vcpkg manifest mode, Docker, CI build/test, and vcpkg port publishing
-  workflow.
+- CMake, vcpkg manifest mode, Docker, CI build/test, and package publishing
+  workflows for Homebrew, npm, winget, vcpkg, and release-native installers.
+
+## Install
+
+### Homebrew
+
+```bash
+brew install stescobedo92/tap/azdash
+```
+
+### npm
+
+```bash
+npm install -g @stescobedo9205/azdash
+azdash version
+```
+
+The npm package exposes the CLI as the `azdash` command and downloads the
+matching GitHub Release binary during installation.
+
+### GitHub Releases
+
+Each release publishes portable archives and native installer packages:
+
+- Windows: `azdash-windows-x64.zip`
+- Linux: `azdash-linux-x64.deb`, `azdash-linux-x64.rpm`,
+  `azdash-ubuntu-latest.tar.gz`
+- macOS: `azdash-macos.pkg`, `azdash-macos.dmg`,
+  `azdash-macos-latest.tar.gz`
+
+Download them from the
+[GitHub Releases](https://github.com/stescobedo92/az-dashboard/releases) page.
+
+### vcpkg
+
+Coming soon. The package name is expected to be `stescobedo92-azdash`, with the
+installed CLI command `azdash`, once the upstream vcpkg pull request is
+approved.
+
+### winget
+
+Coming soon. The expected command is:
+
+```powershell
+winget install azdash
+```
 
 ## Screenshots
 

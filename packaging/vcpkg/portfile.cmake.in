@@ -3,7 +3,7 @@ vcpkg_from_github(
   REPO @REPOSITORY@
   REF v@VERSION@
   SHA512 @SHA512@
-  HEAD_REF main
+  HEAD_REF master
 )
 
 vcpkg_cmake_configure(

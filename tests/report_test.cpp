@@ -53,11 +53,13 @@ TEST(ReportTest, WritesPdfHeader) {
 
   azdash::write_cost_pdf(path, account, {azdash::CostComparisonRow{.service = "VM", .current = 1.0}});
 
-  std::ifstream file(path, std::ios::binary);
-  std::string header(8, '\0');
-  file.read(header.data(), static_cast<std::streamsize>(header.size()));
+  {
+    std::ifstream file(path, std::ios::binary);
+    std::string header(8, '\0');
+    file.read(header.data(), static_cast<std::streamsize>(header.size()));
 
-  EXPECT_EQ(header, "%PDF-1.4");
+    EXPECT_EQ(header, "%PDF-1.4");
+  }
   std::filesystem::remove(path);
 }
 
@@ -68,13 +70,15 @@ TEST(ReportTest, EscapesPdfTextDelimiters) {
 
   azdash::write_cost_pdf(path, account, {azdash::CostComparisonRow{.service = "VM (east)\\primary", .current = 1.0}});
 
-  std::ifstream file(path, std::ios::binary);
-  const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  {
+    std::ifstream file(path, std::ios::binary);
+    const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-  EXPECT_NE(content.find("Test \\(Prod\\)"), std::string::npos);
-  EXPECT_NE(content.find("sub\\\\1"), std::string::npos);
-  EXPECT_NE(content.find("tenant\\)1"), std::string::npos);
-  EXPECT_NE(content.find("VM \\(east\\)\\\\primary"), std::string::npos);
+    EXPECT_NE(content.find("Test \\(Prod\\)"), std::string::npos);
+    EXPECT_NE(content.find("sub\\\\1"), std::string::npos);
+    EXPECT_NE(content.find("tenant\\)1"), std::string::npos);
+    EXPECT_NE(content.find("VM \\(east\\)\\\\primary"), std::string::npos);
+  }
   std::filesystem::remove(path);
 }
 

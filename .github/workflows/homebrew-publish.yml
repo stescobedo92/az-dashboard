@@ -1,0 +1,110 @@
+name: Publish Homebrew formula
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without leading v
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  FORMULA_NAME: azdash
+  TAP_REPOSITORY: stescobedo92/homebrew-tap
+
+jobs:
+  publish-homebrew:
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Resolve release metadata
+        shell: bash
+        run: |
+          VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          if [[ ! "${VERSION}" =~ ^[0-9]+([.][0-9]+){0,3}([-+][A-Za-z0-9._-]+)?$ ]]; then
+            echo "Invalid version: ${VERSION}" >&2
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          ARCHIVE="azdash-${VERSION}-source.tar.gz"
+          curl -fsSL "${URL}" -o "${ARCHIVE}"
+          SHA256="$(sha256sum "${ARCHIVE}" | awk '{print $1}')"
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "TAG=${TAG}" >> "${GITHUB_ENV}"
+          echo "URL=${URL}" >> "${GITHUB_ENV}"
+          echo "SHA256=${SHA256}" >> "${GITHUB_ENV}"
+
+      - name: Stop when tap token is missing
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        run: |
+          echo "HOMEBREW_TAP_TOKEN is required to push Formula/${FORMULA_NAME}.rb into ${TAP_REPOSITORY}." >&2
+          exit 1
+
+      - name: Checkout tap
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ env.TAP_REPOSITORY }}
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Render formula
+        shell: bash
+        run: |
+          mkdir -p tap/Formula
+          cat > tap/Formula/${FORMULA_NAME}.rb <<FORMULA
+          class Azdash < Formula
+            desc "Azure cost, trend, and waste diagnostics CLI"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+            url "${URL}"
+            sha256 "${SHA256}"
+            license "MIT"
+
+            depends_on "cmake" => :build
+            depends_on "ninja" => :build
+            depends_on "ftxui"
+            depends_on "nlohmann-json"
+
+            def install
+              system "cmake", "-S", ".", "-B", "build", "-G", "Ninja",
+                "-DAZ_DASHBOARD_BUILD_TESTS=OFF",
+                *std_cmake_args
+              system "cmake", "--build", "build"
+              system "cmake", "--install", "build"
+            end
+
+            test do
+              system "#{bin}/azdash", "version"
+            end
+          end
+          FORMULA
+
+      - name: Commit and push formula
+        shell: bash
+        working-directory: tap
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add Formula/${FORMULA_NAME}.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew formula already up to date."
+            exit 0
+          fi
+          git commit -m "Update ${FORMULA_NAME} to ${VERSION}"
+          git push
+
+  test-formula:
+    needs: publish-homebrew
+    runs-on: macos-latest
+    steps:
+      - name: Install formula from tap
+        run: |
+          brew tap stescobedo92/tap
+          brew install stescobedo92/tap/azdash
+          azdash version
