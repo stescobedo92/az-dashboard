@@ -72,6 +72,19 @@ public:
 };
 
 /**
+ * @brief Subscription alias persistence required by alias-sub workflows.
+ */
+class ICliSubscriptionAliasStore {
+public:
+  virtual ~ICliSubscriptionAliasStore() = default;
+
+  [[nodiscard]] virtual auto list() const -> std::vector<SubscriptionAlias> = 0;
+  [[nodiscard]] virtual auto resolve(const std::string& selector) const -> std::string = 0;
+  virtual void set(const std::string& alias, const std::string& subscription) const = 0;
+  [[nodiscard]] virtual auto remove(const std::string& alias) const -> bool = 0;
+};
+
+/**
  * @brief Runtime dependencies used by the CLI dispatcher.
  */
 struct CliRuntime {
@@ -82,6 +95,7 @@ struct CliRuntime {
   const ICliTrendProvider& trend_provider;
   const ICliWasteProvider& waste_provider;
   const ICliReportWriter& report_writer;
+  const ICliSubscriptionAliasStore& alias_store;
 };
 
 /**

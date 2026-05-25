@@ -36,10 +36,11 @@ class FakeCliRuntime final : public azdash::ICliAccountProvider,
                              public azdash::ICliCostProvider,
                              public azdash::ICliTrendProvider,
                              public azdash::ICliWasteProvider,
-                             public azdash::ICliReportWriter {
+                             public azdash::ICliReportWriter,
+                             public azdash::ICliSubscriptionAliasStore {
 public:
   [[nodiscard]] auto runtime() const -> azdash::CliRuntime {
-    return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this};
+    return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this, *this};
   }
 
   [[nodiscard]] auto account(const azdash::CliOptions&) const -> azdash::AccountInfo override {
@@ -47,13 +48,15 @@ public:
     return {.subscription_id = "sub-id", .subscription_name = "Subscription", .tenant_id = "tenant", .user_name = "user"};
   }
 
-  [[nodiscard]] auto current_month_costs(const azdash::CliOptions&) const -> std::vector<azdash::ServiceCost> override {
+  [[nodiscard]] auto current_month_costs(const azdash::CliOptions& options) const -> std::vector<azdash::ServiceCost> override {
     ++current_cost_calls;
+    last_subscription = options.subscription;
     return current_costs;
   }
 
-  [[nodiscard]] auto previous_month_costs(const azdash::CliOptions&) const -> std::vector<azdash::ServiceCost> override {
+  [[nodiscard]] auto previous_month_costs(const azdash::CliOptions& options) const -> std::vector<azdash::ServiceCost> override {
     ++previous_cost_calls;
+    last_subscription = options.subscription;
     return previous_costs;
   }
 
@@ -97,6 +100,33 @@ public:
     last_waste_report_row_count = rows.size();
   }
 
+  [[nodiscard]] auto list() const -> std::vector<azdash::SubscriptionAlias> override {
+    ++alias_list_calls;
+    return aliases;
+  }
+
+  [[nodiscard]] auto resolve(const std::string& selector) const -> std::string override {
+    ++alias_resolve_calls;
+    for (const auto& alias : aliases) {
+      if (alias.alias == selector) {
+        return alias.subscription;
+      }
+    }
+    return selector;
+  }
+
+  void set(const std::string& alias, const std::string& subscription) const override {
+    ++alias_set_calls;
+    last_alias_name = alias;
+    last_alias_subscription = subscription;
+  }
+
+  [[nodiscard]] auto remove(const std::string& alias) const -> bool override {
+    ++alias_remove_calls;
+    last_alias_name = alias;
+    return remove_result;
+  }
+
   mutable std::ostringstream out;
   mutable std::ostringstream err;
   std::vector<azdash::ServiceCost> current_costs;
@@ -112,7 +142,16 @@ public:
   mutable int write_cost_calls{0};
   mutable int write_trend_calls{0};
   mutable int write_waste_calls{0};
+  mutable int alias_list_calls{0};
+  mutable int alias_resolve_calls{0};
+  mutable int alias_set_calls{0};
+  mutable int alias_remove_calls{0};
+  bool remove_result{true};
+  std::vector<azdash::SubscriptionAlias> aliases;
   mutable std::filesystem::path last_report_path;
+  mutable std::string last_subscription;
+  mutable std::string last_alias_name;
+  mutable std::string last_alias_subscription;
   mutable std::size_t last_cost_report_row_count{0};
   mutable std::size_t last_trend_report_row_count{0};
   mutable std::size_t last_waste_report_row_count{0};
@@ -124,6 +163,30 @@ TEST(CliTest, ParsesCostCommandWithGlobalFlags) {
   EXPECT_EQ(options.command, azdash::CommandKind::Cost);
   EXPECT_EQ(options.output, azdash::OutputFormat::Json);
   EXPECT_EQ(options.subscription, "sub-1");
+}
+
+TEST(CliTest, ParsesAliasSubSetAndRemove) {
+  const auto set_options = parse({"alias-sub", "set", "prod", "sub-id"});
+  const auto remove_options = parse({"alias-sub", "remove", "prod"});
+
+  EXPECT_EQ(set_options.command, azdash::CommandKind::AliasSub);
+  EXPECT_EQ(set_options.alias_action, azdash::AliasSubAction::Set);
+  EXPECT_EQ(set_options.alias_name, "prod");
+  EXPECT_EQ(set_options.alias_subscription, "sub-id");
+  EXPECT_EQ(remove_options.command, azdash::CommandKind::AliasSub);
+  EXPECT_EQ(remove_options.alias_action, azdash::AliasSubAction::Remove);
+  EXPECT_EQ(remove_options.alias_name, "prod");
+}
+
+TEST(CliTest, ParsesAliasSubShortcutAndList) {
+  const auto shortcut_options = parse({"alias-sub", "prod", "sub-id"});
+  const auto list_options = parse({"alias-sub"});
+
+  EXPECT_EQ(shortcut_options.alias_action, azdash::AliasSubAction::Set);
+  EXPECT_EQ(shortcut_options.alias_name, "prod");
+  EXPECT_EQ(shortcut_options.alias_subscription, "sub-id");
+  EXPECT_EQ(list_options.command, azdash::CommandKind::AliasSub);
+  EXPECT_EQ(list_options.alias_action, azdash::AliasSubAction::List);
 }
 
 TEST(CliTest, ParsesReportWasteSelectorsAndPath) {
@@ -207,8 +270,10 @@ TEST(CliTest, DispatchesHelpWithoutAzureDependencies) {
 }
 
 TEST(CliTest, DispatchesCostThroughInjectedProviders) {
-  auto options = azdash::CliOptions{.command = azdash::CommandKind::Cost, .output = azdash::OutputFormat::Csv};
+  auto options = azdash::CliOptions{
+      .command = azdash::CommandKind::Cost, .output = azdash::OutputFormat::Csv, .subscription = "prod"};
   auto fake = FakeCliRuntime();
+  fake.aliases = {azdash::SubscriptionAlias{.alias = "prod", .subscription = "sub-id"}};
   fake.current_costs = {azdash::ServiceCost{.service = "Storage", .cost = 25.0}};
   fake.previous_costs = {azdash::ServiceCost{.service = "Storage", .cost = 10.0}};
 
@@ -217,8 +282,30 @@ TEST(CliTest, DispatchesCostThroughInjectedProviders) {
   EXPECT_EQ(fake.account_calls, 0);
   EXPECT_EQ(fake.current_cost_calls, 1);
   EXPECT_EQ(fake.previous_cost_calls, 1);
+  EXPECT_EQ(fake.alias_resolve_calls, 1);
+  EXPECT_EQ(fake.last_subscription, "sub-id");
   EXPECT_NE(fake.out.str().find("service,previous,current,delta,delta_percent"), std::string::npos);
   EXPECT_NE(fake.out.str().find("Storage,10.00,25.00,15.00,150.0%"), std::string::npos);
+}
+
+TEST(CliTest, DispatchesAliasSubSetAndListWithoutAzureCalls) {
+  auto fake = FakeCliRuntime();
+  auto set_options = azdash::CliOptions{.command = azdash::CommandKind::AliasSub,
+                                        .alias_action = azdash::AliasSubAction::Set,
+                                        .alias_name = "prod",
+                                        .alias_subscription = "sub-id"};
+
+  EXPECT_EQ(azdash::run(set_options, fake.runtime()), 0);
+  EXPECT_EQ(fake.alias_set_calls, 1);
+  EXPECT_EQ(fake.last_alias_name, "prod");
+  EXPECT_EQ(fake.last_alias_subscription, "sub-id");
+  EXPECT_EQ(fake.account_calls, 0);
+
+  auto list_options = azdash::CliOptions{.command = azdash::CommandKind::AliasSub};
+  list_options.output = azdash::OutputFormat::Csv;
+  fake.aliases = {azdash::SubscriptionAlias{.alias = "prod", .subscription = "sub-id"}};
+  EXPECT_EQ(azdash::run(list_options, fake.runtime()), 0);
+  EXPECT_NE(fake.out.str().find("alias,subscription"), std::string::npos);
 }
 
 TEST(CliTest, DispatchesReportThroughInjectedReportWriter) {

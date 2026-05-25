@@ -4,6 +4,7 @@
 #include "az_dashboard/azure_cli.hpp"
 #include "az_dashboard/render.hpp"
 #include "az_dashboard/report.hpp"
+#include "az_dashboard/subscription_aliases.hpp"
 
 #include <array>
 #include <charconv>
@@ -171,8 +172,10 @@ private:
     } else if (command == "update") {
       options.command = CommandKind::Update;
       parse_flags_only(options, args, index, "update");
-    } else if (command == "report") {
+  } else if (command == "report") {
       parse_report_command(options, args, index);
+    } else if (command == "alias-sub") {
+      parse_alias_sub_command(options, args, index);
     } else {
       throw std::invalid_argument("unknown command: " + command);
     }
@@ -201,6 +204,50 @@ private:
     } else {
       throw std::invalid_argument("unknown report kind: " + report_kind);
     }
+  }
+
+  static void parse_alias_sub_command(CliOptions& options, std::span<const std::string> args, std::size_t& index) {
+    options.command = CommandKind::AliasSub;
+    if (index >= args.size() || args[index] == "list") {
+      options.alias_action = AliasSubAction::List;
+      if (index < args.size()) {
+        ++index;
+      }
+      parse_flags_only(options, args, index, "alias-sub list");
+      return;
+    }
+
+    const auto action = args[index++];
+    if (action == "set") {
+      if (index + 1 >= args.size()) {
+        throw std::invalid_argument("alias-sub set requires <alias> <subscription>");
+      }
+      options.alias_action = AliasSubAction::Set;
+      options.alias_name = args[index++];
+      options.alias_subscription = args[index++];
+      parse_flags_only(options, args, index, "alias-sub set");
+      return;
+    }
+
+    if (action == "remove" || action == "rm") {
+      if (index >= args.size()) {
+        throw std::invalid_argument("alias-sub remove requires <alias>");
+      }
+      options.alias_action = AliasSubAction::Remove;
+      options.alias_name = args[index++];
+      parse_flags_only(options, args, index, "alias-sub remove");
+      return;
+    }
+
+    if (index < args.size()) {
+      options.alias_action = AliasSubAction::Set;
+      options.alias_name = action;
+      options.alias_subscription = args[index++];
+      parse_flags_only(options, args, index, "alias-sub");
+      return;
+    }
+
+    throw std::invalid_argument("unknown alias-sub action: " + action);
   }
 };
 
@@ -261,26 +308,66 @@ public:
   }
 };
 
+class LocalSubscriptionAliasStore final : public ICliSubscriptionAliasStore {
+public:
+  LocalSubscriptionAliasStore() : store_(default_subscription_alias_path()) {}
+
+  [[nodiscard]] auto list() const -> std::vector<SubscriptionAlias> override {
+    return store_.list();
+  }
+
+  [[nodiscard]] auto resolve(const std::string& selector) const -> std::string override {
+    if (const auto alias = store_.resolve(selector)) {
+      return *alias;
+    }
+    return selector;
+  }
+
+  void set(const std::string& alias, const std::string& subscription) const override {
+    store_.set(alias, subscription);
+  }
+
+  [[nodiscard]] auto remove(const std::string& alias) const -> bool override {
+    return store_.remove(alias);
+  }
+
+private:
+  SubscriptionAliasStore store_;
+};
+
+[[nodiscard]] auto resolve_subscription_alias(const CliOptions& options,
+                                              const ICliSubscriptionAliasStore& alias_store) -> CliOptions {
+  auto resolved = options;
+  if (!resolved.subscription.empty()) {
+    resolved.subscription = alias_store.resolve(resolved.subscription);
+  }
+  return resolved;
+}
+
 auto execute_cost(const CliOptions& options, const CliRuntime& runtime) -> int {
-  render_costs(compare_costs(runtime.cost_provider.current_month_costs(options),
-                             runtime.cost_provider.previous_month_costs(options)),
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  render_costs(compare_costs(runtime.cost_provider.current_month_costs(resolved_options),
+                             runtime.cost_provider.previous_month_costs(resolved_options)),
                options.output, runtime.out);
   return 0;
 }
 
 auto execute_trend(const CliOptions& options, const CliRuntime& runtime) -> int {
-  render_trends(runtime.trend_provider.six_month_trends(options), options.output, runtime.out);
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  render_trends(runtime.trend_provider.six_month_trends(resolved_options), options.output, runtime.out);
   return 0;
 }
 
 auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int {
-  render_waste(runtime.waste_provider.waste_findings(options), options.output, runtime.out);
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  render_waste(runtime.waste_provider.waste_findings(resolved_options), options.output, runtime.out);
   return 0;
 }
 
 auto execute_cost_report(const CliOptions& options, const CliRuntime& runtime, const AccountInfo& account) -> int {
-  const auto rows = compare_costs(runtime.cost_provider.current_month_costs(options),
-                                  runtime.cost_provider.previous_month_costs(options));
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  const auto rows = compare_costs(runtime.cost_provider.current_month_costs(resolved_options),
+                                  runtime.cost_provider.previous_month_costs(resolved_options));
   const auto path = runtime.report_writer.resolve_path(options.report_path, "azdash-cost.pdf");
   runtime.report_writer.write_cost(path, account, rows);
   runtime.out << "Report written to " << path.string() << '\n';
@@ -288,7 +375,8 @@ auto execute_cost_report(const CliOptions& options, const CliRuntime& runtime, c
 }
 
 auto execute_trend_report(const CliOptions& options, const CliRuntime& runtime, const AccountInfo& account) -> int {
-  const auto rows = runtime.trend_provider.six_month_trends(options);
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  const auto rows = runtime.trend_provider.six_month_trends(resolved_options);
   const auto path = runtime.report_writer.resolve_path(options.report_path, "azdash-trend.pdf");
   runtime.report_writer.write_trend(path, account, rows);
   runtime.out << "Report written to " << path.string() << '\n';
@@ -296,11 +384,32 @@ auto execute_trend_report(const CliOptions& options, const CliRuntime& runtime, 
 }
 
 auto execute_waste_report(const CliOptions& options, const CliRuntime& runtime, const AccountInfo& account) -> int {
-  const auto rows = runtime.waste_provider.waste_findings(options);
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  const auto rows = runtime.waste_provider.waste_findings(resolved_options);
   const auto path = runtime.report_writer.resolve_path(options.report_path, "azdash-waste.pdf");
   runtime.report_writer.write_waste(path, account, rows);
   runtime.out << "Report written to " << path.string() << '\n';
   return 0;
+}
+
+auto execute_alias_sub(const CliOptions& options, const CliRuntime& runtime) -> int {
+  switch (options.alias_action) {
+  case AliasSubAction::Set:
+    runtime.alias_store.set(options.alias_name, options.alias_subscription);
+    runtime.out << "alias-sub '" << options.alias_name << "' saved\n";
+    return 0;
+  case AliasSubAction::Remove:
+    if (runtime.alias_store.remove(options.alias_name)) {
+      runtime.out << "alias-sub '" << options.alias_name << "' removed\n";
+      return 0;
+    }
+    runtime.err << "error: alias-sub not found: " << options.alias_name << '\n';
+    return 1;
+  case AliasSubAction::List:
+    render_subscription_aliases(runtime.alias_store.list(), options.output, runtime.out);
+    return 0;
+  }
+  return 1;
 }
 
 using ScreenWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&);
@@ -367,12 +476,17 @@ public:
       return 0;
     }
 
+    if (options.command == CommandKind::AliasSub) {
+      return execute_alias_sub(options, runtime_);
+    }
+
     if (const auto* workflow = find_screen_workflow(options.command)) {
       return workflow->execute(options, runtime_);
     }
 
     if (const auto* workflow = find_report_workflow(options.command)) {
-      const auto account = runtime_.account_provider.account(options);
+      const auto resolved_options = resolve_subscription_alias(options, runtime_.alias_store);
+      const auto account = runtime_.account_provider.account(resolved_options);
       return workflow->execute(options, runtime_, account);
     }
 
@@ -393,7 +507,8 @@ auto parse_args(std::span<const std::string> args) -> CliOptions {
 auto run(const CliOptions& options) -> int {
   auto provider = AzureCliRuntimeProvider();
   auto report_writer = PdfReportWriter();
-  auto runtime = CliRuntime{std::cout, std::cerr, provider, provider, provider, provider, report_writer};
+  auto alias_store = LocalSubscriptionAliasStore();
+  auto runtime = CliRuntime{std::cout, std::cerr, provider, provider, provider, provider, report_writer, alias_store};
   return run(options, runtime);
 }
 
@@ -416,11 +531,14 @@ Usage:
   azdash [global flags] report cost [--path file-or-directory]
   azdash [global flags] report trend [services...] [--path file-or-directory]
   azdash [global flags] report waste [checks...] [--path file-or-directory]
+  azdash alias-sub [list]
+  azdash alias-sub set <alias> <subscription-id-or-name>
+  azdash alias-sub remove <alias>
   azdash version
   azdash update
 
 Global flags:
-  --subscription <id-or-name>          Azure subscription override.
+  --subscription <id-name-or-alias>    Azure subscription override.
   --tenant <id>                       Reserved for tenant-aware providers.
   -o, --output <table|json|csv>        Output format. Defaults to table.
   --path <file-or-directory>          Report output path.
@@ -429,6 +547,10 @@ Global flags:
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault
+
+Alias examples:
+  azdash alias-sub set prod 00000000-0000-0000-0000-000000000000
+  azdash --subscription prod cost
 )";
 }
 

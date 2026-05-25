@@ -24,7 +24,10 @@ The implementation is intentionally layered:
 - Extra Azure heuristics for unattached managed disks, orphan public IPs, old
   snapshots, and stopped or deallocated virtual machines.
 - Selective scans by check name, for example `compute network advisor`.
+- Local subscription aliases through `alias-sub` so long subscription IDs can be
+  referenced by short names in later commands.
 - Output formats: `table`, `json`, and `csv`.
+- Styled terminal tables with colors and inline progress bars for table output.
 - PDF reports for cost, trend, and waste workflows.
 - CMake, vcpkg manifest mode, Docker, CI build/test, and vcpkg port publishing
   workflow.
@@ -69,7 +72,12 @@ azdash cost
 azdash --output json cost
 azdash --output csv waste advisor compute
 
-# Use a specific subscription
+# Create and use a local subscription alias
+azdash alias-sub set prod "00000000-0000-0000-0000-000000000000"
+azdash --subscription prod cost
+azdash alias-sub list
+
+# Use a specific subscription directly
 azdash --subscription "00000000-0000-0000-0000-000000000000" trend
 
 # Trend for selected services

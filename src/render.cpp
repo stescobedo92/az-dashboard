@@ -3,6 +3,8 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/table.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -27,17 +29,72 @@ public:
   }
 };
 
+[[nodiscard]] auto progress_bar(double value, double max_value) -> std::string {
+  constexpr auto width = 18;
+  const auto ratio = max_value <= 0.0 ? 0.0 : std::clamp(value / max_value, 0.0, 1.0);
+  const auto filled = static_cast<int>(ratio * width + 0.5);
+  std::string bar{"["};
+  bar.append(static_cast<std::size_t>(filled), '#');
+  bar.append(static_cast<std::size_t>(width - filled), '-');
+  bar += ']';
+  return bar;
+}
+
+[[nodiscard]] auto max_abs_delta(const std::vector<CostComparisonRow>& rows) -> double {
+  auto max_value = 0.0;
+  for (const auto& row : rows) {
+    max_value = std::max(max_value, std::abs(row.delta));
+  }
+  return max_value;
+}
+
+[[nodiscard]] auto max_total(const std::vector<MonthCost>& rows) -> double {
+  auto max_value = 0.0;
+  for (const auto& row : rows) {
+    max_value = std::max(max_value, row.total);
+  }
+  return max_value;
+}
+
+[[nodiscard]] auto max_savings(const std::vector<WasteFinding>& rows) -> double {
+  auto max_value = 0.0;
+  for (const auto& row : rows) {
+    max_value = std::max(max_value, row.estimated_monthly_savings);
+  }
+  return max_value;
+}
+
 class TerminalTableWriter {
 public:
   void write(std::vector<std::vector<std::string>> rows, std::ostream& out) const {
-    auto table = ftxui::Table(std::move(rows));
+    auto table = ftxui::Table(padded(std::move(rows)));
     table.SelectAll().Border(ftxui::LIGHT);
-    table.SelectRow(0).Decorate(ftxui::bold);
-    table.SelectColumn(0).Decorate(ftxui::bold);
-    auto document = table.Render();
+    table.SelectAll().Decorate(ftxui::color(ftxui::Color::GrayLight));
+    table.SelectRow(0).Decorate(ftxui::bold | ftxui::color(ftxui::Color::Cyan));
+    table.SelectColumn(0).Decorate(ftxui::bold | ftxui::color(ftxui::Color::White));
+    auto document = ftxui::vbox({
+        ftxui::text("azdash") | ftxui::bold | ftxui::color(ftxui::Color::Cyan),
+        ftxui::separator(),
+        table.Render(),
+        ftxui::separator(),
+        ftxui::hbox({
+            ftxui::text("complete ") | ftxui::color(ftxui::Color::Green),
+            ftxui::gauge(1.0F) | ftxui::color(ftxui::Color::Green),
+        }),
+    });
     auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
     ftxui::Render(screen, document);
     out << screen.ToString() << '\n';
+  }
+
+private:
+  [[nodiscard]] static auto padded(std::vector<std::vector<std::string>> rows) -> std::vector<std::vector<std::string>> {
+    for (auto& row : rows) {
+      for (auto& cell : row) {
+        cell = " " + cell + " ";
+      }
+    }
+    return rows;
   }
 };
 
@@ -161,10 +218,12 @@ public:
   }
 
   [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
-    std::vector<std::vector<std::string>> rows{{"Service", "Previous", "Current", "Delta", "Delta %"}};
+    const auto max_delta = max_abs_delta(rows_);
+    std::vector<std::vector<std::string>> rows{{"Service", "Previous", "Current", "Delta", "Delta %", "Delta Bar"}};
     for (const auto& row : rows_) {
       rows.push_back({row.service, NumberFormatter::money(row.previous), NumberFormatter::money(row.current),
-                      NumberFormatter::money(row.delta), NumberFormatter::percent(row.delta_percent)});
+                      NumberFormatter::money(row.delta), NumberFormatter::percent(row.delta_percent),
+                      progress_bar(std::abs(row.delta), max_delta)});
     }
     return rows;
   }
@@ -200,9 +259,10 @@ public:
   }
 
   [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
-    std::vector<std::vector<std::string>> rows{{"Month", "Total"}};
+    const auto max_value = max_total(rows_);
+    std::vector<std::vector<std::string>> rows{{"Month", "Total", "Spend Bar"}};
     for (const auto& row : rows_) {
-      rows.push_back({row.month, NumberFormatter::money(row.total)});
+      rows.push_back({row.month, NumberFormatter::money(row.total), progress_bar(row.total, max_value)});
     }
     return rows;
   }
@@ -247,16 +307,53 @@ public:
   }
 
   [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
-    std::vector<std::vector<std::string>> rows{{"Check", "Type", "Name", "Location", "Savings", "Recommendation"}};
+    const auto max_value = max_savings(rows_);
+    std::vector<std::vector<std::string>> rows{
+        {"Check", "Type", "Name", "Location", "Savings", "Savings Bar", "Recommendation"}};
     for (const auto& row : rows_) {
       rows.push_back({row.check, row.resource_type, row.name, row.location,
-                      NumberFormatter::money(row.estimated_monthly_savings), row.recommendation});
+                      NumberFormatter::money(row.estimated_monthly_savings),
+                      progress_bar(row.estimated_monthly_savings, max_value), row.recommendation});
     }
     return rows;
   }
 
 private:
   const std::vector<WasteFinding>& rows_;
+};
+
+class SubscriptionAliasRowsView {
+public:
+  explicit SubscriptionAliasRowsView(const std::vector<SubscriptionAlias>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
+    nlohmann::json payload = nlohmann::json::array();
+    for (const auto& row : rows_) {
+      payload.push_back({{"alias", row.alias}, {"subscription", row.subscription}});
+    }
+    return payload;
+  }
+
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("alias,subscription");
+    for (const auto& row : rows_) {
+      csv.row([&row](CsvRowWriter& writer) {
+        writer.escaped_cell(row.alias);
+        writer.escaped_cell(row.subscription);
+      });
+    }
+  }
+
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Alias", "Subscription"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.alias, row.subscription});
+    }
+    return rows;
+  }
+
+private:
+  const std::vector<SubscriptionAlias>& rows_;
 };
 
 template <typename RowsView>
@@ -288,6 +385,10 @@ void render_trends(const std::vector<MonthCost>& rows, OutputFormat format, std:
 
 void render_waste(const std::vector<WasteFinding>& rows, OutputFormat format, std::ostream& out) {
   render_rows(WasteRowsView(rows), format, out);
+}
+
+void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, OutputFormat format, std::ostream& out) {
+  render_rows(SubscriptionAliasRowsView(rows), format, out);
 }
 
 void render_version(std::ostream& out) {

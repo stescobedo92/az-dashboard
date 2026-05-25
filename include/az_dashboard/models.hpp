@@ -27,9 +27,27 @@ enum class CommandKind {
   ReportCost,
   ReportTrend,
   ReportWaste,
+  AliasSub,
   Version,
   Update,
   Help
+};
+
+/**
+ * @brief Subscription alias command action.
+ */
+enum class AliasSubAction {
+  List,
+  Set,
+  Remove
+};
+
+/**
+ * @brief Local alias for an Azure subscription selector.
+ */
+struct SubscriptionAlias {
+  std::string alias;
+  std::string subscription;
 };
 
 /**
@@ -45,6 +63,9 @@ struct CliOptions {
   std::string subscription;
   std::string tenant;
   std::string report_path;
+  AliasSubAction alias_action{AliasSubAction::List};
+  std::string alias_name;
+  std::string alias_subscription;
   std::vector<std::string> selectors;
   int function_memory_threshold_percent{10};
   int secrets_idle_days{90};

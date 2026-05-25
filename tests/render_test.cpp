@@ -82,4 +82,23 @@ TEST(RenderTest, WasteCsvNeutralizesFormulaInjectionAndEscapesQuotes) {
             "'@advisor,Microsoft.Compute/disks,'-disk,westus,3.00,\"delete, \"\"if unused\"\"\",'\tid\n");
 }
 
+TEST(RenderTest, TableOutputIncludesProgressBars) {
+  std::ostringstream out;
+
+  azdash::render_trends({{.month = "2026-04", .total = 5.0}, {.month = "2026-05", .total = 10.0}},
+                        azdash::OutputFormat::Table, out);
+
+  EXPECT_NE(out.str().find("Spend Bar"), std::string::npos);
+  EXPECT_NE(out.str().find("[#########---------]"), std::string::npos);
+  EXPECT_NE(out.str().find("[##################]"), std::string::npos);
+}
+
+TEST(RenderTest, AliasCsvEscapesAliasValues) {
+  std::ostringstream out;
+
+  azdash::render_subscription_aliases({{.alias = "=prod", .subscription = "sub,id"}}, azdash::OutputFormat::Csv, out);
+
+  EXPECT_EQ(out.str(), "alias,subscription\n'=prod,\"sub,id\"\n");
+}
+
 } // namespace

@@ -33,6 +33,14 @@ void render_trends(const std::vector<MonthCost>& rows, OutputFormat format, std:
 void render_waste(const std::vector<WasteFinding>& rows, OutputFormat format, std::ostream& out);
 
 /**
+ * @brief Renders subscription aliases to an output stream.
+ * @param rows Subscription alias rows.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, OutputFormat format, std::ostream& out);
+
+/**
  * @brief Renders version information.
  * @param out Output stream.
  */
