@@ -63,6 +63,22 @@ jobs:
       - name: Test
         run: ctest --test-dir build --build-config Release --output-on-failure
 
+      - name: Resolve package version
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          VERSION="${VERSION#v}"
+          if [[ ! "${VERSION}" =~ ^[0-9]+([.][0-9]+){0,3}([-+][A-Za-z0-9._-]+)?$ ]]; then
+            echo "Invalid version: ${VERSION}" >&2
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
       - name: Package install tree
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: bash
@@ -71,12 +87,70 @@ jobs:
           ARCHIVE="azdash-${{ matrix.os }}.tar.gz"
           tar -czf "${ARCHIVE}" -C package azdash
 
+      - name: Package Windows portable zip
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path portable | Out-Null
+          Copy-Item package/azdash/bin/azdash.exe portable/azdash.exe
+          Compress-Archive -Path portable/azdash.exe -DestinationPath azdash-windows-x64.zip -Force
+
+      - name: Package Linux deb and rpm
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo gem install --no-document fpm
+          rm -rf package-root
+          DESTDIR="${PWD}/package-root" cmake --install build --config Release --prefix /usr --strip
+          fpm -s dir -t deb -n azdash -v "${VERSION}" \
+            --license MIT \
+            --url "https://github.com/${GITHUB_REPOSITORY}" \
+            --description "Azure cost, trend, and waste diagnostics CLI" \
+            --maintainer "Sergio Triana Escobedo <stescobedo92@users.noreply.github.com>" \
+            -C package-root usr
+          fpm -s dir -t rpm -n azdash -v "${VERSION}" \
+            --license MIT \
+            --url "https://github.com/${GITHUB_REPOSITORY}" \
+            --description "Azure cost, trend, and waste diagnostics CLI" \
+            --maintainer "Sergio Triana Escobedo <stescobedo92@users.noreply.github.com>" \
+            -C package-root usr
+          mv azdash_"${VERSION}"_amd64.deb azdash-linux-x64.deb
+          mv azdash-"${VERSION}"-1.x86_64.rpm azdash-linux-x64.rpm
+
+      - name: Package macOS pkg and dmg
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && runner.os == 'macOS'
+        shell: bash
+        run: |
+          rm -rf package-root dmg-root
+          DESTDIR="${PWD}/package-root" cmake --install build --config Release --prefix /usr/local --strip
+          pkgbuild \
+            --root package-root \
+            --identifier com.stescobedo92.azdash \
+            --version "${VERSION}" \
+            --install-location / \
+            azdash-macos.pkg
+          mkdir -p dmg-root
+          cp azdash-macos.pkg dmg-root/
+          hdiutil create \
+            -volname "azdash ${VERSION}" \
+            -srcfolder dmg-root \
+            -ov \
+            -format UDZO \
+            azdash-macos.dmg
+
       - name: Upload release asset candidate
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: azdash-${{ matrix.os }}
-          path: azdash-${{ matrix.os }}.tar.gz
+          path: |
+            azdash-${{ matrix.os }}.tar.gz
+            azdash-windows-x64.zip
+            azdash-linux-x64.deb
+            azdash-linux-x64.rpm
+            azdash-macos.pkg
+            azdash-macos.dmg
+          if-no-files-found: ignore
 
   sanitizer:
     name: ubuntu-latest sanitizers
@@ -181,3 +255,10 @@ jobs:
       - name: Dispatch vcpkg publish pipeline
         shell: bash
         run: gh workflow run vcpkg-publish.yml --ref "${TAG}" -f version="${VERSION}"
+
+      - name: Dispatch package publishing pipelines
+        shell: bash
+        run: |
+          gh workflow run homebrew-publish.yml --ref "${TAG}" -f version="${VERSION}"
+          gh workflow run winget-publish.yml --ref "${TAG}" -f version="${VERSION}"
+          gh workflow run npm-publish.yml --ref "${TAG}" -f version="${VERSION}"
