@@ -1,4 +1,4 @@
-name: Publish Homebrew formula
+name: homebrew
 
 on:
   release:

@@ -1,4 +1,4 @@
-name: Publish vcpkg port
+name: vcpkg
 
 on:
   release:

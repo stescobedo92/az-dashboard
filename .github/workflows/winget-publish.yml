@@ -1,4 +1,4 @@
-name: Publish winget manifest
+name: winget
 
 on:
   release:
