@@ -1,11 +1,11 @@
 # azdash
 
-[![CI](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml/badge.svg?branch=feature/az-dashboard-hardening)](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml)
-[![RELEASE](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml)
-[![NPM](https://github.com/stescobedo92/az-dashboard/actions/workflows/npm-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/npm-publish.yml)
-[![BREW](https://github.com/stescobedo92/az-dashboard/actions/workflows/homebrew-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/homebrew-publish.yml)
-[![VCPKG](https://github.com/stescobedo92/az-dashboard/actions/workflows/vcpkg-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/vcpkg-publish.yml)
-[![WINGET](https://github.com/stescobedo92/az-dashboard/actions/workflows/winget-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/winget-publish.yml)
+[![CI](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/stescobedo92/az-dashboard/actions/workflows/release.yml)
+[![release](https://img.shields.io/github/v/release/stescobedo92/az-dashboard?label=release)](https://github.com/stescobedo92/az-dashboard/releases)
+[![npm](https://github.com/stescobedo92/az-dashboard/actions/workflows/npm-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/npm-publish.yml)
+[![homebrew](https://github.com/stescobedo92/az-dashboard/actions/workflows/homebrew-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/homebrew-publish.yml)
+[![vcpkg](https://github.com/stescobedo92/az-dashboard/actions/workflows/vcpkg-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/vcpkg-publish.yml)
+[![winget](https://github.com/stescobedo92/az-dashboard/actions/workflows/winget-publish.yml/badge.svg)](https://github.com/stescobedo92/az-dashboard/actions/workflows/winget-publish.yml)
 
 `azdash` is an Azure-focused C++23 CLI. It audits Azure spending,
 Six-month cost trends, and waste signals from Azure Advisor, plus resource
