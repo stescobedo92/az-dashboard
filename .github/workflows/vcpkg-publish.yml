@@ -67,6 +67,7 @@ jobs:
       - name: Validate manifest build
         run: >
           vcpkg install
+          --classic
           --overlay-ports=ports
           --triplet=x64-linux
           stescobedo92-azdash
