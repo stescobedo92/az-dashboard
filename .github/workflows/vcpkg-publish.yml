@@ -13,18 +13,25 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  VCPKG_PORT_NAME: stescobedo92-azdash
+
 jobs:
   validate-port:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref }}
 
       - name: Set up vcpkg
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
 
-      - name: Render local vcpkg port
+      - name: Resolve release metadata
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
           VERSION="${VERSION#v}"
@@ -32,42 +39,67 @@ jobs:
             echo "Invalid version: ${VERSION}" >&2
             exit 1
           fi
-          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${VERSION}.tar.gz"
+          TAG="v${VERSION}"
+          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "TAG=${TAG}" >> "${GITHUB_ENV}"
+          echo "ARCHIVE_URL=${ARCHIVE_URL}" >> "${GITHUB_ENV}"
+          gh release download "${TAG}" --pattern "${VCPKG_PORT_NAME}-${VERSION}.sha512.txt" --dir .
+
+      - name: Render local vcpkg port
+        shell: bash
+        run: |
           curl -fsSL "${ARCHIVE_URL}" -o source.tar.gz
           SHA512="$(vcpkg hash source.tar.gz)"
-          mkdir -p ports/az-dashboard
-          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g; s/@SHA512@/${SHA512}/g" packaging/vcpkg/portfile.cmake.in > ports/az-dashboard/portfile.cmake
-          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" packaging/vcpkg/vcpkg.json.in > ports/az-dashboard/vcpkg.json
+          EXPECTED_SHA512="$(awk -F= '/^sha512=/{print $2}' "${VCPKG_PORT_NAME}-${VERSION}.sha512.txt")"
+          if [[ "${SHA512}" != "${EXPECTED_SHA512}" ]]; then
+            echo "Release SHA512 mismatch" >&2
+            echo "expected: ${EXPECTED_SHA512}" >&2
+            echo "actual:   ${SHA512}" >&2
+            exit 1
+          fi
+          mkdir -p "ports/${VCPKG_PORT_NAME}"
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g; s/@SHA512@/${SHA512}/g" \
+            packaging/vcpkg/portfile.cmake.in > "ports/${VCPKG_PORT_NAME}/portfile.cmake"
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" \
+            packaging/vcpkg/vcpkg.json.in > "ports/${VCPKG_PORT_NAME}/vcpkg.json"
 
       - name: Validate manifest build
         run: >
           vcpkg install
           --overlay-ports=ports
           --triplet=x64-linux
-          az-dashboard
+          stescobedo92-azdash
 
       - name: Upload rendered port
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: az-dashboard-vcpkg-port
-          path: ports/az-dashboard
+          name: stescobedo92-azdash-vcpkg-port
+          path: ports/stescobedo92-azdash
 
   publish-private-registry:
     needs: validate-port
     runs-on: ubuntu-latest
     env:
       VCPKG_REGISTRY_REPOSITORY: ${{ secrets.VCPKG_REGISTRY_REPOSITORY }}
+      VCPKG_REGISTRY_TOKEN: ${{ secrets.VCPKG_REGISTRY_TOKEN }}
     steps:
       - name: Skip private registry publish when secrets are absent
-        if: env.VCPKG_REGISTRY_REPOSITORY == ''
-        run: echo "VCPKG_REGISTRY_REPOSITORY is not configured; rendered port artifact was already uploaded."
+        if: env.VCPKG_REGISTRY_REPOSITORY == '' || env.VCPKG_REGISTRY_TOKEN == ''
+        run: echo "Registry secrets are not fully configured; rendered port artifact was already uploaded."
 
       - name: Checkout source
-        if: env.VCPKG_REGISTRY_REPOSITORY != ''
+        if: env.VCPKG_REGISTRY_REPOSITORY != '' && env.VCPKG_REGISTRY_TOKEN != ''
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref }}
+
+      - name: Set up vcpkg
+        if: env.VCPKG_REGISTRY_REPOSITORY != '' && env.VCPKG_REGISTRY_TOKEN != ''
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
 
       - name: Checkout vcpkg registry
-        if: env.VCPKG_REGISTRY_REPOSITORY != ''
+        if: env.VCPKG_REGISTRY_REPOSITORY != '' && env.VCPKG_REGISTRY_TOKEN != ''
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ secrets.VCPKG_REGISTRY_REPOSITORY }}
@@ -75,7 +107,7 @@ jobs:
           path: registry
 
       - name: Render port into registry branch
-        if: env.VCPKG_REGISTRY_REPOSITORY != ''
+        if: env.VCPKG_REGISTRY_REPOSITORY != '' && env.VCPKG_REGISTRY_TOKEN != ''
         shell: bash
         run: |
           VERSION="${{ github.event.inputs.version || github.event.release.tag_name }}"
@@ -84,22 +116,33 @@ jobs:
             echo "Invalid version: ${VERSION}" >&2
             exit 1
           fi
-          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${VERSION}.tar.gz"
+          TAG="v${VERSION}"
+          ARCHIVE_URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz"
+          GH_TOKEN="${{ github.token }}" gh release download "${TAG}" --pattern "${VCPKG_PORT_NAME}-${VERSION}.sha512.txt" --dir .
           curl -fsSL "${ARCHIVE_URL}" -o source.tar.gz
           SHA512="$(vcpkg hash source.tar.gz)"
-          BRANCH="feature/publish-az-dashboard-${VERSION}"
+          EXPECTED_SHA512="$(awk -F= '/^sha512=/{print $2}' "${VCPKG_PORT_NAME}-${VERSION}.sha512.txt")"
+          if [[ "${SHA512}" != "${EXPECTED_SHA512}" ]]; then
+            echo "Release SHA512 mismatch" >&2
+            echo "expected: ${EXPECTED_SHA512}" >&2
+            echo "actual:   ${SHA512}" >&2
+            exit 1
+          fi
+          BRANCH="feature/publish-${VCPKG_PORT_NAME}-${VERSION}"
           cd registry
           git checkout -b "${BRANCH}"
-          mkdir -p ports/az-dashboard
+          mkdir -p "ports/${VCPKG_PORT_NAME}"
           cd ..
-          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g; s/@SHA512@/${SHA512}/g" packaging/vcpkg/portfile.cmake.in > registry/ports/az-dashboard/portfile.cmake
-          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" packaging/vcpkg/vcpkg.json.in > registry/ports/az-dashboard/vcpkg.json
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g; s/@SHA512@/${SHA512}/g" \
+            packaging/vcpkg/portfile.cmake.in > "registry/ports/${VCPKG_PORT_NAME}/portfile.cmake"
+          sed "s/@VERSION@/${VERSION}/g; s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" \
+            packaging/vcpkg/vcpkg.json.in > "registry/ports/${VCPKG_PORT_NAME}/vcpkg.json"
           cd registry
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add ports/az-dashboard
-          git commit -m "Publish az-dashboard ${VERSION} vcpkg port"
+          git add "ports/${VCPKG_PORT_NAME}"
+          git commit -m "Publish ${VCPKG_PORT_NAME} ${VERSION} vcpkg port"
           git push --set-upstream origin "${BRANCH}"
-          gh pr create --fill --title "Publish az-dashboard ${VERSION}" --body "Publishes the az-dashboard vcpkg port generated from ${GITHUB_REPOSITORY}@${VERSION}."
-        env:
-          GH_TOKEN: ${{ secrets.VCPKG_REGISTRY_TOKEN }}
+          GH_TOKEN="${VCPKG_REGISTRY_TOKEN}" gh pr create --fill \
+            --title "Publish ${VCPKG_PORT_NAME} ${VERSION}" \
+            --body "Publishes the ${VCPKG_PORT_NAME} vcpkg port for the azdash CLI from ${GITHUB_REPOSITORY}@${TAG}."

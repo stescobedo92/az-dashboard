@@ -31,6 +31,8 @@ The implementation is intentionally layered:
 - PDF reports for cost, trend, and waste workflows.
 - CMake, vcpkg manifest mode, Docker, CI build/test, and vcpkg port publishing
   workflow.
+- Published vcpkg package name: `stescobedo92-azdash`; installed CLI command:
+  `azdash`.
 
 ## Screenshots
 
