@@ -6,6 +6,8 @@
 
 namespace azdash {
 
+// CLI contract models.
+
 /**
  * @brief Supported command output formats.
  */
@@ -32,6 +34,10 @@ enum class CommandKind {
 
 /**
  * @brief Parsed command-line options shared by all workflows.
+ *
+ * Global flags populate Azure subscription and tenant selectors, report output
+ * location, display format, and bounded compatibility thresholds used by waste
+ * analysis.
  */
 struct CliOptions {
   CommandKind command{CommandKind::Help};
@@ -43,6 +49,8 @@ struct CliOptions {
   int function_memory_threshold_percent{10};
   int secrets_idle_days{90};
 };
+
+// Azure analysis domain models.
 
 /**
  * @brief Azure subscription identity information.
@@ -105,13 +113,34 @@ struct AnalysisSnapshot {
   std::vector<WasteFinding> waste;
 };
 
+// External process execution models.
+
+/**
+ * @brief Typed external process invocation.
+ */
+struct ProcessCommand {
+  std::string executable;
+  std::vector<std::string> arguments;
+};
+
+/**
+ * @brief Options shared by external process runners.
+ */
+struct ProcessRunnerOptions {
+  std::chrono::milliseconds timeout{std::chrono::seconds{30}};
+};
+
 /**
  * @brief Result of executing an external process.
+ *
+ * `stdout_text` carries normal process output, usually JSON from the Azure CLI.
+ * `stderr_text` carries diagnostic output when a runner can capture it.
  */
 struct CommandResult {
   int exit_code{0};
   std::string stdout_text;
   std::string stderr_text;
+  bool timed_out{false};
 };
 
 } // namespace azdash

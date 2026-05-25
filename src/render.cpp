@@ -4,63 +4,138 @@
 #include <ftxui/dom/table.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <iomanip>
-#include <iostream>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <string_view>
+#include <utility>
 
 namespace azdash {
 namespace {
 
-auto money(double value) -> std::string {
-  std::ostringstream out;
-  out << std::fixed << std::setprecision(2) << value;
-  return out.str();
-}
-
-auto percent(double value) -> std::string {
-  std::ostringstream out;
-  out << std::fixed << std::setprecision(1) << value << "%";
-  return out.str();
-}
-
-void print_table(std::vector<std::vector<std::string>> rows, std::ostream& out) {
-  auto table = ftxui::Table(std::move(rows));
-  table.SelectAll().Border(ftxui::LIGHT);
-  table.SelectRow(0).Decorate(ftxui::bold);
-  table.SelectColumn(0).Decorate(ftxui::bold);
-  auto document = table.Render();
-  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
-  ftxui::Render(screen, document);
-  out << screen.ToString() << '\n';
-}
-
-void render_json(const nlohmann::json& payload, std::ostream& out) {
-  out << payload.dump(2) << '\n';
-}
-
-void csv_escape(std::ostream& out, const std::string& value) {
-  const auto must_quote = value.find_first_of(",\"\n") != std::string::npos;
-  if (!must_quote) {
-    out << value;
-    return;
+class NumberFormatter {
+public:
+  [[nodiscard]] static auto money(double value) -> std::string {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(2) << value;
+    return out.str();
   }
-  out << '"';
-  for (const auto c : value) {
-    if (c == '"') {
-      out << "\"\"";
-    } else {
-      out << c;
+
+  [[nodiscard]] static auto percent(double value) -> std::string {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1) << value << "%";
+    return out.str();
+  }
+};
+
+class TerminalTableWriter {
+public:
+  void write(std::vector<std::vector<std::string>> rows, std::ostream& out) const {
+    auto table = ftxui::Table(std::move(rows));
+    table.SelectAll().Border(ftxui::LIGHT);
+    table.SelectRow(0).Decorate(ftxui::bold);
+    table.SelectColumn(0).Decorate(ftxui::bold);
+    auto document = table.Render();
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
+    ftxui::Render(screen, document);
+    out << screen.ToString() << '\n';
+  }
+};
+
+class JsonWriter {
+public:
+  void write(const nlohmann::json& payload, std::ostream& out) const {
+    out << payload.dump(2) << '\n';
+  }
+};
+
+class CsvCellEscaper {
+public:
+  void write(std::ostream& out, const std::string& value) const {
+    const auto escaped_value = needs_formula_neutralization(value) ? "'" + value : value;
+    const auto must_quote = escaped_value.find_first_of(",\"\n\r") != std::string::npos;
+    if (!must_quote) {
+      out << escaped_value;
+      return;
     }
+    out << '"';
+    for (const auto c : escaped_value) {
+      if (c == '"') {
+        out << "\"\"";
+      } else {
+        out << c;
+      }
+    }
+    out << '"';
   }
-  out << '"';
-}
 
-} // namespace
+private:
+  [[nodiscard]] static auto needs_formula_neutralization(const std::string& value) -> bool {
+    if (value.empty()) {
+      return false;
+    }
+    const auto first = value.front();
+    return first == '=' || first == '+' || first == '-' || first == '@' || first == '\t' || first == '\r';
+  }
+};
 
-void render_costs(const std::vector<CostComparisonRow>& rows, OutputFormat format, std::ostream& out) {
-  if (format == OutputFormat::Json) {
+class CsvRowWriter {
+public:
+  explicit CsvRowWriter(std::ostream& out) : out_(out) {}
+
+  void escaped_cell(const std::string& value) {
+    separator();
+    escaper_.write(out_, value);
+  }
+
+  void raw_cell(std::string_view value) {
+    separator();
+    out_ << value;
+  }
+
+  void end() {
+    out_ << '\n';
+  }
+
+private:
+  void separator() {
+    if (first_) {
+      first_ = false;
+      return;
+    }
+    out_ << ',';
+  }
+
+  std::ostream& out_;
+  CsvCellEscaper escaper_;
+  bool first_{true};
+};
+
+class CsvDocumentWriter {
+public:
+  explicit CsvDocumentWriter(std::ostream& out) : out_(out) {}
+
+  void header(std::string_view value) {
+    out_ << value << '\n';
+  }
+
+  template <typename WriteRow>
+  void row(WriteRow write_row) {
+    CsvRowWriter writer(out_);
+    write_row(writer);
+    writer.end();
+  }
+
+private:
+  std::ostream& out_;
+};
+
+class CostRowsView {
+public:
+  explicit CostRowsView(const std::vector<CostComparisonRow>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
-    for (const auto& row : rows) {
+    for (const auto& row : rows_) {
       payload.push_back({
           {"service", row.service},
           {"previous", row.previous},
@@ -69,60 +144,80 @@ void render_costs(const std::vector<CostComparisonRow>& rows, OutputFormat forma
           {"deltaPercent", row.delta_percent},
       });
     }
-    render_json(payload, out);
-    return;
+    return payload;
   }
 
-  if (format == OutputFormat::Csv) {
-    out << "service,previous,current,delta,delta_percent\n";
-    for (const auto& row : rows) {
-      csv_escape(out, row.service);
-      out << ',' << money(row.previous) << ',' << money(row.current) << ',' << money(row.delta) << ','
-          << percent(row.delta_percent) << '\n';
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("service,previous,current,delta,delta_percent");
+    for (const auto& row : rows_) {
+      csv.row([&row](CsvRowWriter& writer) {
+        writer.escaped_cell(row.service);
+        writer.raw_cell(NumberFormatter::money(row.previous));
+        writer.raw_cell(NumberFormatter::money(row.current));
+        writer.raw_cell(NumberFormatter::money(row.delta));
+        writer.raw_cell(NumberFormatter::percent(row.delta_percent));
+      });
     }
-    return;
   }
 
-  std::vector<std::vector<std::string>> table{{"Service", "Previous", "Current", "Delta", "Delta %"}};
-  for (const auto& row : rows) {
-    table.push_back({row.service, money(row.previous), money(row.current), money(row.delta), percent(row.delta_percent)});
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Service", "Previous", "Current", "Delta", "Delta %"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.service, NumberFormatter::money(row.previous), NumberFormatter::money(row.current),
+                      NumberFormatter::money(row.delta), NumberFormatter::percent(row.delta_percent)});
+    }
+    return rows;
   }
-  print_table(std::move(table), out);
-}
 
-void render_trends(const std::vector<MonthCost>& rows, OutputFormat format, std::ostream& out) {
-  if (format == OutputFormat::Json) {
+private:
+  const std::vector<CostComparisonRow>& rows_;
+};
+
+class TrendRowsView {
+public:
+  explicit TrendRowsView(const std::vector<MonthCost>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
-    for (const auto& row : rows) {
+    for (const auto& row : rows_) {
       nlohmann::json services = nlohmann::json::array();
       for (const auto& service : row.services) {
         services.push_back({{"service", service.service}, {"cost", service.cost}});
       }
       payload.push_back({{"month", row.month}, {"total", row.total}, {"services", services}});
     }
-    render_json(payload, out);
-    return;
+    return payload;
   }
 
-  if (format == OutputFormat::Csv) {
-    out << "month,total\n";
-    for (const auto& row : rows) {
-      out << row.month << ',' << money(row.total) << '\n';
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("month,total");
+    for (const auto& row : rows_) {
+      csv.row([&row](CsvRowWriter& writer) {
+        writer.escaped_cell(row.month);
+        writer.raw_cell(NumberFormatter::money(row.total));
+      });
     }
-    return;
   }
 
-  std::vector<std::vector<std::string>> table{{"Month", "Total"}};
-  for (const auto& row : rows) {
-    table.push_back({row.month, money(row.total)});
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Month", "Total"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.month, NumberFormatter::money(row.total)});
+    }
+    return rows;
   }
-  print_table(std::move(table), out);
-}
 
-void render_waste(const std::vector<WasteFinding>& rows, OutputFormat format, std::ostream& out) {
-  if (format == OutputFormat::Json) {
+private:
+  const std::vector<MonthCost>& rows_;
+};
+
+class WasteRowsView {
+public:
+  explicit WasteRowsView(const std::vector<WasteFinding>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
-    for (const auto& row : rows) {
+    for (const auto& row : rows_) {
       payload.push_back({
           {"check", row.check},
           {"resourceId", row.resource_id},
@@ -133,35 +228,66 @@ void render_waste(const std::vector<WasteFinding>& rows, OutputFormat format, st
           {"estimatedMonthlySavings", row.estimated_monthly_savings},
       });
     }
-    render_json(payload, out);
-    return;
+    return payload;
   }
 
-  if (format == OutputFormat::Csv) {
-    out << "check,resource_type,name,location,estimated_monthly_savings,recommendation,resource_id\n";
-    for (const auto& row : rows) {
-      csv_escape(out, row.check);
-      out << ',';
-      csv_escape(out, row.resource_type);
-      out << ',';
-      csv_escape(out, row.name);
-      out << ',';
-      csv_escape(out, row.location);
-      out << ',' << money(row.estimated_monthly_savings) << ',';
-      csv_escape(out, row.recommendation);
-      out << ',';
-      csv_escape(out, row.resource_id);
-      out << '\n';
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("check,resource_type,name,location,estimated_monthly_savings,recommendation,resource_id");
+    for (const auto& row : rows_) {
+      csv.row([&row](CsvRowWriter& writer) {
+        writer.escaped_cell(row.check);
+        writer.escaped_cell(row.resource_type);
+        writer.escaped_cell(row.name);
+        writer.escaped_cell(row.location);
+        writer.raw_cell(NumberFormatter::money(row.estimated_monthly_savings));
+        writer.escaped_cell(row.recommendation);
+        writer.escaped_cell(row.resource_id);
+      });
     }
-    return;
   }
 
-  std::vector<std::vector<std::string>> table{{"Check", "Type", "Name", "Location", "Savings", "Recommendation"}};
-  for (const auto& row : rows) {
-    table.push_back({row.check, row.resource_type, row.name, row.location, money(row.estimated_monthly_savings),
-                     row.recommendation});
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Check", "Type", "Name", "Location", "Savings", "Recommendation"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.check, row.resource_type, row.name, row.location,
+                      NumberFormatter::money(row.estimated_monthly_savings), row.recommendation});
+    }
+    return rows;
   }
-  print_table(std::move(table), out);
+
+private:
+  const std::vector<WasteFinding>& rows_;
+};
+
+template <typename RowsView>
+void render_rows(const RowsView& rows, OutputFormat format, std::ostream& out) {
+  switch (format) {
+  case OutputFormat::Json:
+    JsonWriter{}.write(rows.json(), out);
+    return;
+  case OutputFormat::Csv: {
+    CsvDocumentWriter csv(out);
+    rows.csv(csv);
+    return;
+  }
+  case OutputFormat::Table:
+    break;
+  }
+  TerminalTableWriter{}.write(rows.table(), out);
+}
+
+} // namespace
+
+void render_costs(const std::vector<CostComparisonRow>& rows, OutputFormat format, std::ostream& out) {
+  render_rows(CostRowsView(rows), format, out);
+}
+
+void render_trends(const std::vector<MonthCost>& rows, OutputFormat format, std::ostream& out) {
+  render_rows(TrendRowsView(rows), format, out);
+}
+
+void render_waste(const std::vector<WasteFinding>& rows, OutputFormat format, std::ostream& out) {
+  render_rows(WasteRowsView(rows), format, out);
 }
 
 void render_version(std::ostream& out) {

@@ -8,11 +8,43 @@ project(
 )
 
 option(AZ_DASHBOARD_BUILD_TESTS "Build az-dashboard unit tests" ON)
+option(AZ_DASHBOARD_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(AZ_DASHBOARD_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(AZ_DASHBOARD_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+
+if(AZ_DASHBOARD_ENABLE_ASAN AND AZ_DASHBOARD_ENABLE_TSAN)
+  message(FATAL_ERROR "ASan and TSan cannot be enabled together")
+endif()
+
+set(AZ_DASHBOARD_SANITIZER_FLAGS "")
+if(NOT MSVC)
+  set(AZ_DASHBOARD_SANITIZERS "")
+  if(AZ_DASHBOARD_ENABLE_ASAN)
+    list(APPEND AZ_DASHBOARD_SANITIZERS address)
+  endif()
+  if(AZ_DASHBOARD_ENABLE_UBSAN)
+    list(APPEND AZ_DASHBOARD_SANITIZERS undefined)
+  endif()
+  if(AZ_DASHBOARD_ENABLE_TSAN)
+    list(APPEND AZ_DASHBOARD_SANITIZERS thread)
+  endif()
+  if(AZ_DASHBOARD_SANITIZERS)
+    list(JOIN AZ_DASHBOARD_SANITIZERS "," AZ_DASHBOARD_SANITIZER_FLAGS)
+  endif()
+endif()
+
+function(az_dashboard_apply_sanitizers target_name)
+  if(AZ_DASHBOARD_SANITIZER_FLAGS)
+    target_compile_options(${target_name} PRIVATE -fsanitize=${AZ_DASHBOARD_SANITIZER_FLAGS})
+    target_link_options(${target_name} PRIVATE -fsanitize=${AZ_DASHBOARD_SANITIZER_FLAGS})
+  endif()
+endfunction()
 
 add_library(az_dashboard_lib STATIC
   src/analytics.cpp
   src/azure_cli.cpp
   src/cli.cpp
+  src/process_runner.cpp
   src/render.cpp
   src/report.cpp
 )
@@ -34,6 +66,7 @@ target_link_libraries(az_dashboard_lib
     ftxui::screen
     nlohmann_json::nlohmann_json
 )
+az_dashboard_apply_sanitizers(az_dashboard_lib)
 
 if(MSVC)
   target_compile_options(az_dashboard_lib PRIVATE /W4 /permissive-)
@@ -48,6 +81,7 @@ target_compile_definitions(az_dashboard_lib
 
 add_executable(azdash src/main.cpp)
 target_link_libraries(azdash PRIVATE az_dashboard_lib)
+az_dashboard_apply_sanitizers(azdash)
 
 include(GNUInstallDirs)
 install(TARGETS azdash az_dashboard_lib
@@ -85,10 +119,13 @@ if(AZ_DASHBOARD_BUILD_TESTS)
 
   add_executable(az-dashboard-tests
     tests/analytics_test.cpp
+    tests/azure_cli_test.cpp
     tests/cli_test.cpp
+    tests/render_test.cpp
     tests/report_test.cpp
   )
   target_link_libraries(az-dashboard-tests PRIVATE az_dashboard_lib GTest::gtest_main)
+  az_dashboard_apply_sanitizers(az-dashboard-tests)
 
   include(GoogleTest)
   gtest_discover_tests(az-dashboard-tests)
