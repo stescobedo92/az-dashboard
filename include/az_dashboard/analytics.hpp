@@ -11,14 +11,35 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace azdash {
 
+namespace detail {
+
+template <typename Value>
+auto string_key(Value&& value) -> std::string {
+  if constexpr (std::convertible_to<Value, std::string>) {
+    return std::string{std::forward<Value>(value)};
+  } else {
+    return std::string{std::string_view{std::forward<Value>(value)}};
+  }
+}
+
+inline auto normalize_selector(std::string key) -> std::string {
+  std::ranges::transform(key, key.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return key;
+}
+
+} // namespace detail
+
 /**
  * @brief Aggregates numeric values by a string key.
  * @tparam Range Input range type.
- * @tparam KeyFn Callable that returns a string key.
+ * @tparam KeyFn Callable that returns a string-like key.
  * @tparam ValueFn Callable that returns a numeric value.
  * @param values Source values.
  * @param key_fn Function used to select the aggregate key.
@@ -31,7 +52,7 @@ requires StringKeySelector<KeyFn, std::ranges::range_value_t<Range>> &&
 auto aggregate_by(const Range& values, KeyFn key_fn, ValueFn value_fn) -> std::map<std::string, double> {
   std::map<std::string, double> totals;
   for (const auto& value : values) {
-    totals[key_fn(value)] += value_fn(value);
+    totals[detail::string_key(key_fn(value))] += value_fn(value);
   }
   return totals;
 }
@@ -55,23 +76,70 @@ auto filter_selected(const Range& values, const std::vector<std::string>& select
 
   std::set<std::string> wanted;
   for (auto selector : selectors) {
-    std::ranges::transform(selector, selector.begin(), [](unsigned char c) {
-      return static_cast<char>(std::tolower(c));
-    });
-    wanted.insert(selector);
+    wanted.insert(detail::normalize_selector(std::move(selector)));
   }
 
   std::vector<std::ranges::range_value_t<Range>> filtered;
   for (const auto& value : values) {
-    auto key = key_fn(value);
-    std::ranges::transform(key, key.begin(), [](unsigned char c) {
-      return static_cast<char>(std::tolower(c));
-    });
+    auto key = detail::normalize_selector(detail::string_key(key_fn(value)));
     if (wanted.contains(key)) {
       filtered.push_back(value);
     }
   }
   return filtered;
+}
+
+/**
+ * @brief Builds a fair current-versus-previous cost comparison from selector-based inputs.
+ * @tparam CurrentRange Current billing-window range type.
+ * @tparam PreviousRange Previous billing-window range type.
+ * @tparam KeyFn Callable that returns a string-like service key.
+ * @tparam ValueFn Callable that returns a numeric cost value.
+ * @param current Current billing-window values.
+ * @param previous Previous billing-window values.
+ * @param key_fn Function used to select the service key.
+ * @param value_fn Function used to select the cost value.
+ * @return Sorted comparison rows by descending current cost.
+ */
+template <InputRange CurrentRange, InputRange PreviousRange, typename KeyFn, typename ValueFn>
+requires StringKeySelector<KeyFn, std::ranges::range_value_t<CurrentRange>> &&
+         StringKeySelector<KeyFn, std::ranges::range_value_t<PreviousRange>> &&
+         DoubleValueSelector<ValueFn, std::ranges::range_value_t<CurrentRange>> &&
+         DoubleValueSelector<ValueFn, std::ranges::range_value_t<PreviousRange>>
+auto compare_costs_by(const CurrentRange& current,
+                      const PreviousRange& previous,
+                      KeyFn key_fn,
+                      ValueFn value_fn) -> std::vector<CostComparisonRow> {
+  const auto current_by_service = aggregate_by(current, key_fn, value_fn);
+  const auto previous_by_service = aggregate_by(previous, key_fn, value_fn);
+
+  std::set<std::string> services;
+  for (const auto& [service, _] : current_by_service) {
+    services.insert(service);
+  }
+  for (const auto& [service, _] : previous_by_service) {
+    services.insert(service);
+  }
+
+  std::vector<CostComparisonRow> rows;
+  rows.reserve(services.size());
+
+  for (const auto& service : services) {
+    const auto previous_it = previous_by_service.find(service);
+    const auto current_it = current_by_service.find(service);
+    const auto previous_cost = previous_it == previous_by_service.end() ? 0.0 : previous_it->second;
+    const auto current_cost = current_it == current_by_service.end() ? 0.0 : current_it->second;
+    const auto delta = current_cost - previous_cost;
+    const auto percent = previous_cost == 0.0 ? (current_cost == 0.0 ? 0.0 : 100.0)
+                                              : (delta / previous_cost) * 100.0;
+    rows.push_back({service, previous_cost, current_cost, delta, percent});
+  }
+
+  std::ranges::sort(rows, [](const auto& lhs, const auto& rhs) {
+    return lhs.current > rhs.current;
+  });
+
+  return rows;
 }
 
 /**
