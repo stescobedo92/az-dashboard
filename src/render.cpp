@@ -392,7 +392,29 @@ void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, Out
 }
 
 void render_version(std::ostream& out) {
-  out << "azdash " << AZ_DASHBOARD_VERSION << '\n';
+  constexpr auto banner =
+      "    _    _________     _    ____  _   _ \n"
+      "   / \\  |__  /  _ \\   / \\  / ___|| | | |\n"
+      "  / _ \\   / /| | | | / _ \\ \\___ \\| |_| |\n"
+      " / ___ \\ / /_| |_| |/ ___ \\ ___) |  _  |\n"
+      "/_/   \\_/____|____//_/   \\_\\____/|_| |_|\n";
+
+  auto document = ftxui::vbox({
+      ftxui::text(""),
+      ftxui::paragraph(banner) | ftxui::bold | ftxui::color(ftxui::Color::Green),
+      ftxui::separator() | ftxui::color(ftxui::Color::Green),
+      ftxui::hbox({ftxui::text(" Version: "), ftxui::text(AZ_DASHBOARD_VERSION) | ftxui::bold}),
+      ftxui::hbox({ftxui::text(" Release: "), ftxui::text("az-dashboard " AZ_DASHBOARD_VERSION)}),
+      ftxui::hbox({ftxui::text(" Built:   "), ftxui::text(__DATE__ " " __TIME__)}),
+      ftxui::hbox({ftxui::text(" C++:     "), ftxui::text(std::to_string(__cplusplus))}),
+      ftxui::hbox({ftxui::text(" Backend: "), ftxui::text("Azure CLI")}),
+      ftxui::hbox({ftxui::text(" Output:  "), ftxui::text("FTXUI tables, JSON, CSV, PDF reports")}),
+      ftxui::hbox({ftxui::text(" Config:  "), ftxui::text("subscription aliases enabled")}),
+  }) | ftxui::border | ftxui::color(ftxui::Color::Green);
+
+  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fit(document));
+  ftxui::Render(screen, document);
+  out << screen.ToString() << '\n';
 }
 
 } // namespace azdash
