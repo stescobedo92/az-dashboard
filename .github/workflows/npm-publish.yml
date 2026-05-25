@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 env:
-  NPM_PACKAGE_NAME: "@stescobedo92/azdash"
+  NPM_PACKAGE_NAME: "@stescobedo9205/azdash"
 
 jobs:
   publish-npm:
