@@ -44,6 +44,7 @@ add_library(az_dashboard_lib STATIC
   src/analytics.cpp
   src/azure_cli.cpp
   src/cli.cpp
+  src/history.cpp
   src/process_runner.cpp
   src/render.cpp
   src/report.cpp
@@ -122,6 +123,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/analytics_test.cpp
     tests/azure_cli_test.cpp
     tests/cli_test.cpp
+    tests/history_test.cpp
     tests/render_test.cpp
     tests/report_test.cpp
     tests/subscription_aliases_test.cpp

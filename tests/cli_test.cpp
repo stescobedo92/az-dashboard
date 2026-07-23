@@ -37,10 +37,11 @@ class FakeCliRuntime final : public azdash::ICliAccountProvider,
                              public azdash::ICliTrendProvider,
                              public azdash::ICliWasteProvider,
                              public azdash::ICliReportWriter,
-                             public azdash::ICliSubscriptionAliasStore {
+                             public azdash::ICliSubscriptionAliasStore,
+                             public azdash::ICliCostHistoryStore {
 public:
   [[nodiscard]] auto runtime() const -> azdash::CliRuntime {
-    return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this, *this};
+    return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this, *this, *this};
   }
 
   [[nodiscard]] auto account(const azdash::CliOptions&) const -> azdash::AccountInfo override {
@@ -50,13 +51,13 @@ public:
 
   [[nodiscard]] auto current_month_costs(const azdash::CliOptions& options) const -> std::vector<azdash::ServiceCost> override {
     ++current_cost_calls;
-    last_subscription = options.subscription;
+    last_subscription = options.subscriptions.empty() ? std::string{} : options.subscriptions.front();
     return current_costs;
   }
 
   [[nodiscard]] auto previous_month_costs(const azdash::CliOptions& options) const -> std::vector<azdash::ServiceCost> override {
     ++previous_cost_calls;
-    last_subscription = options.subscription;
+    last_subscription = options.subscriptions.empty() ? std::string{} : options.subscriptions.front();
     return previous_costs;
   }
 
@@ -127,6 +128,19 @@ public:
     return remove_result;
   }
 
+  void record(const azdash::CostSnapshot& snapshot) const override {
+    ++record_calls;
+    if (record_throws) {
+      throw std::runtime_error("history store unavailable");
+    }
+    last_snapshot = snapshot;
+  }
+
+  [[nodiscard]] auto snapshots() const -> std::vector<azdash::CostSnapshot> override {
+    ++snapshot_list_calls;
+    return history;
+  }
+
   mutable std::ostringstream out;
   mutable std::ostringstream err;
   std::vector<azdash::ServiceCost> current_costs;
@@ -147,7 +161,12 @@ public:
   mutable int alias_set_calls{0};
   mutable int alias_remove_calls{0};
   bool remove_result{true};
+  bool record_throws{false};
   std::vector<azdash::SubscriptionAlias> aliases;
+  std::vector<azdash::CostSnapshot> history;
+  mutable int record_calls{0};
+  mutable int snapshot_list_calls{0};
+  mutable azdash::CostSnapshot last_snapshot;
   mutable std::filesystem::path last_report_path;
   mutable std::string last_subscription;
   mutable std::string last_alias_name;
@@ -162,7 +181,8 @@ TEST(CliTest, ParsesCostCommandWithGlobalFlags) {
 
   EXPECT_EQ(options.command, azdash::CommandKind::Cost);
   EXPECT_EQ(options.output, azdash::OutputFormat::Json);
-  EXPECT_EQ(options.subscription, "sub-1");
+  ASSERT_EQ(options.subscriptions.size(), 1);
+  EXPECT_EQ(options.subscriptions[0], "sub-1");
 }
 
 TEST(CliTest, ParsesAliasSubSetAndRemove) {
@@ -229,6 +249,28 @@ TEST(CliTest, ParsesShortOutputFlag) {
   EXPECT_EQ(options.command, azdash::CommandKind::Cost);
 }
 
+TEST(CliTest, ParsesMarkdownOutputFormat) {
+  EXPECT_EQ(parse({"--output", "markdown", "cost"}).output, azdash::OutputFormat::Markdown);
+  EXPECT_EQ(parse({"-o", "md", "trend"}).output, azdash::OutputFormat::Markdown);
+}
+
+TEST(CliTest, ParsesHistoryCommand) {
+  EXPECT_EQ(parse({"history"}).command, azdash::CommandKind::History);
+  EXPECT_EQ(parse({"history", "--output", "json"}).output, azdash::OutputFormat::Json);
+}
+
+TEST(CliTest, ParsesGroupByDimension) {
+  EXPECT_EQ(parse({"cost"}).group_by, azdash::GroupBy::Service);
+  EXPECT_EQ(parse({"--group-by", "service", "cost"}).group_by, azdash::GroupBy::Service);
+  EXPECT_EQ(parse({"--group-by", "resource-group", "cost"}).group_by, azdash::GroupBy::ResourceGroup);
+  EXPECT_EQ(parse({"--group-by", "rg", "cost"}).group_by, azdash::GroupBy::ResourceGroup);
+}
+
+TEST(CliTest, RejectsUnknownGroupByDimension) {
+  expect_invalid_argument_message({"--group-by", "region", "cost"},
+                                  "unsupported group-by dimension: region");
+}
+
 TEST(CliTest, RejectsMissingFlagValueAtEnd) {
   EXPECT_THROW(parse({"--subscription"}), std::invalid_argument);
 }
@@ -271,7 +313,7 @@ TEST(CliTest, DispatchesHelpWithoutAzureDependencies) {
 
 TEST(CliTest, DispatchesCostThroughInjectedProviders) {
   auto options = azdash::CliOptions{
-      .command = azdash::CommandKind::Cost, .output = azdash::OutputFormat::Csv, .subscription = "prod"};
+      .command = azdash::CommandKind::Cost, .output = azdash::OutputFormat::Csv, .subscriptions = {"prod"}};
   auto fake = FakeCliRuntime();
   fake.aliases = {azdash::SubscriptionAlias{.alias = "prod", .subscription = "sub-id"}};
   fake.current_costs = {azdash::ServiceCost{.service = "Storage", .cost = 25.0}};
@@ -286,6 +328,73 @@ TEST(CliTest, DispatchesCostThroughInjectedProviders) {
   EXPECT_EQ(fake.last_subscription, "sub-id");
   EXPECT_NE(fake.out.str().find("service,previous,current,delta,delta_percent"), std::string::npos);
   EXPECT_NE(fake.out.str().find("Storage,10.00,25.00,15.00,150.0%"), std::string::npos);
+}
+
+TEST(CliTest, AnomalyFlagsSpikeAgainstTrendBaseline) {
+  auto options = azdash::CliOptions{.command = azdash::CommandKind::CostAnomaly};
+  auto fake = FakeCliRuntime();
+  fake.trends = {{.month = "2026-02", .total = 100.0}, {.month = "2026-03", .total = 110.0},
+                 {.month = "2026-04", .total = 90.0},  {.month = "2026-05", .total = 105.0},
+                 {.month = "2026-06", .total = 95.0},  {.month = "2026-07", .total = 900.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 0);
+
+  EXPECT_EQ(fake.trend_calls, 1);
+  EXPECT_NE(fake.out.str().find("Anomaly detected"), std::string::npos);
+  EXPECT_NE(fake.out.str().find("z-score"), std::string::npos);
+}
+
+TEST(CliTest, AnomalyFailsWithoutEnoughTrendData) {
+  auto options = azdash::CliOptions{.command = azdash::CommandKind::CostAnomaly};
+  auto fake = FakeCliRuntime();
+  fake.trends = {{.month = "2026-06", .total = 100.0}, {.month = "2026-07", .total = 100.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 1);
+
+  EXPECT_NE(fake.err.str().find("Not enough data"), std::string::npos);
+}
+
+TEST(CliTest, CostRecordsSnapshotInHistory) {
+  auto options = azdash::CliOptions{
+      .command = azdash::CommandKind::Cost, .output = azdash::OutputFormat::Csv, .subscriptions = {"prod"}};
+  auto fake = FakeCliRuntime();
+  fake.aliases = {azdash::SubscriptionAlias{.alias = "prod", .subscription = "sub-id"}};
+  fake.current_costs = {azdash::ServiceCost{.service = "Storage", .cost = 25.0}};
+  fake.previous_costs = {azdash::ServiceCost{.service = "Storage", .cost = 10.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 0);
+
+  EXPECT_EQ(fake.record_calls, 1);
+  EXPECT_EQ(fake.last_snapshot.subscription, "sub-id");
+  EXPECT_DOUBLE_EQ(fake.last_snapshot.total, 25.0);
+  ASSERT_EQ(fake.last_snapshot.services.size(), 1);
+  EXPECT_EQ(fake.last_snapshot.services[0].service, "Storage");
+  EXPECT_FALSE(fake.last_snapshot.timestamp.empty());
+}
+
+TEST(CliTest, CostSucceedsWhenHistoryRecordingFails) {
+  auto options = azdash::CliOptions{.command = azdash::CommandKind::Cost, .output = azdash::OutputFormat::Csv};
+  auto fake = FakeCliRuntime();
+  fake.record_throws = true;
+  fake.current_costs = {azdash::ServiceCost{.service = "Storage", .cost = 25.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 0);
+
+  EXPECT_EQ(fake.record_calls, 1);
+  EXPECT_NE(fake.err.str().find("could not record cost history"), std::string::npos);
+}
+
+TEST(CliTest, HistoryCommandRendersStoredSnapshots) {
+  auto options = azdash::CliOptions{.command = azdash::CommandKind::History};
+  options.output = azdash::OutputFormat::Csv;
+  auto fake = FakeCliRuntime();
+  fake.history = {{.timestamp = "2026-07-01T10:00:00Z", .subscription = "sub-1", .total = 10.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 0);
+
+  EXPECT_EQ(fake.snapshot_list_calls, 1);
+  EXPECT_NE(fake.out.str().find("timestamp,subscription,total"), std::string::npos);
+  EXPECT_NE(fake.out.str().find("2026-07-01T10:00:00Z,sub-1,10.00"), std::string::npos);
 }
 
 TEST(CliTest, DispatchesAliasSubSetAndListWithoutAzureCalls) {

@@ -85,7 +85,7 @@ void write_document(ftxui::Element document, std::ostream& out) {
 
 class TerminalTableWriter {
 public:
-  void write(std::vector<std::vector<std::string>> rows, std::ostream& out) const {
+  void write(std::vector<std::vector<std::string>> rows, std::ostream& out, ftxui::Element footer = ftxui::text("")) const {
     auto table = ftxui::Table(padded(std::move(rows)));
     table.SelectAll().Border(ftxui::LIGHT);
     table.SelectAll().Decorate(ftxui::color(ftxui::Color::GrayLight));
@@ -95,6 +95,7 @@ public:
         ftxui::text("azdash") | ftxui::bold | ftxui::color(ftxui::Color::Cyan),
         ftxui::separator(),
         table.Render(),
+        footer,
         ftxui::separator(),
         ftxui::hbox({
             ftxui::text("complete ") | ftxui::color(ftxui::Color::Green),
@@ -203,9 +204,71 @@ private:
   std::ostream& out_;
 };
 
+[[nodiscard]] auto markdown_cell(const std::string& value) -> std::string {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (const auto c : value) {
+    if (c == '|') {
+      escaped += "\\|";
+    } else if (c == '\n' || c == '\r') {
+      if (!escaped.empty() && escaped.back() != ' ') {
+        escaped += ' ';
+      }
+    } else {
+      escaped += c;
+    }
+  }
+  return escaped;
+}
+
+class MarkdownTableWriter {
+public:
+  void write(const std::vector<std::vector<std::string>>& rows,
+             std::ostream& out,
+             const std::vector<std::string>& footer_lines = {}) const {
+    if (!rows.empty()) {
+      write_row(rows.front(), out);
+      write_separator(rows.front().size(), out);
+      for (auto row = rows.begin() + 1; row != rows.end(); ++row) {
+        write_row(*row, out);
+      }
+    }
+    for (const auto& line : footer_lines) {
+      out << '\n' << line << '\n';
+    }
+  }
+
+private:
+  static void write_row(const std::vector<std::string>& cells, std::ostream& out) {
+    out << '|';
+    for (const auto& cell : cells) {
+      out << ' ' << markdown_cell(cell) << " |";
+    }
+    out << '\n';
+  }
+
+  static void write_separator(std::size_t columns, std::ostream& out) {
+    out << '|';
+    for (std::size_t index = 0; index < columns; ++index) {
+      out << " --- |";
+    }
+    out << '\n';
+  }
+};
+
 class CostRowsView {
 public:
-  explicit CostRowsView(const std::vector<CostComparisonRow>& rows) : rows_(rows) {}
+  explicit CostRowsView(const std::vector<CostComparisonRow>& rows, double projected_total) : rows_(rows), projected_total_(projected_total) {}
+  
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    if (projected_total_ > 0.0) {
+      return ftxui::hbox({
+          ftxui::text(" Projected EOM Total: ") | ftxui::bold | ftxui::color(ftxui::Color::Yellow),
+          ftxui::text(NumberFormatter::money(projected_total_)) | ftxui::bold | ftxui::color(ftxui::Color::White)
+      });
+    }
+    return ftxui::text("");
+  }
 
   [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
@@ -245,13 +308,34 @@ public:
     return rows;
   }
 
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Service", "Previous", "Current", "Delta", "Delta %"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.service, NumberFormatter::money(row.previous), NumberFormatter::money(row.current),
+                      NumberFormatter::money(row.delta), NumberFormatter::percent(row.delta_percent)});
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    if (projected_total_ > 0.0) {
+      return {"**Projected end-of-month total:** " + NumberFormatter::money(projected_total_)};
+    }
+    return {};
+  }
+
 private:
   const std::vector<CostComparisonRow>& rows_;
+  double projected_total_{0.0};
 };
 
 class TrendRowsView {
 public:
   explicit TrendRowsView(const std::vector<MonthCost>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    return ftxui::text("");
+  }
 
   [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
@@ -284,6 +368,18 @@ public:
     return rows;
   }
 
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Month", "Total"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.month, NumberFormatter::money(row.total)});
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    return {};
+  }
+
 private:
   const std::vector<MonthCost>& rows_;
 };
@@ -291,6 +387,10 @@ private:
 class WasteRowsView {
 public:
   explicit WasteRowsView(const std::vector<WasteFinding>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    return ftxui::text("");
+  }
 
   [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
@@ -335,13 +435,93 @@ public:
     return rows;
   }
 
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Check", "Type", "Name", "Location", "Savings", "Recommendation"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.check, row.resource_type, row.name, row.location,
+                      NumberFormatter::money(row.estimated_monthly_savings), row.recommendation});
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    return {};
+  }
+
 private:
   const std::vector<WasteFinding>& rows_;
+};
+
+class CostHistoryRowsView {
+public:
+  explicit CostHistoryRowsView(const std::vector<CostSnapshot>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    return ftxui::text("");
+  }
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
+    nlohmann::json payload = nlohmann::json::array();
+    for (const auto& row : rows_) {
+      nlohmann::json services = nlohmann::json::array();
+      for (const auto& service : row.services) {
+        services.push_back({{"service", service.service}, {"cost", service.cost}});
+      }
+      payload.push_back({{"timestamp", row.timestamp},
+                         {"subscription", row.subscription},
+                         {"total", row.total},
+                         {"services", services}});
+    }
+    return payload;
+  }
+
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("timestamp,subscription,total");
+    for (const auto& row : rows_) {
+      csv.row([&row](CsvRowWriter& writer) {
+        writer.escaped_cell(row.timestamp);
+        writer.escaped_cell(row.subscription);
+        writer.raw_cell(NumberFormatter::money(row.total));
+      });
+    }
+  }
+
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    auto max_value = 0.0;
+    for (const auto& row : rows_) {
+      max_value = std::max(max_value, row.total);
+    }
+    std::vector<std::vector<std::string>> rows{{"Timestamp", "Subscription", "Total", "Spend Bar"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.timestamp, row.subscription, NumberFormatter::money(row.total),
+                      progress_bar(row.total, max_value)});
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{{"Timestamp", "Subscription", "Total"}};
+    for (const auto& row : rows_) {
+      rows.push_back({row.timestamp, row.subscription, NumberFormatter::money(row.total)});
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    return {};
+  }
+
+private:
+  const std::vector<CostSnapshot>& rows_;
 };
 
 class SubscriptionAliasRowsView {
 public:
   explicit SubscriptionAliasRowsView(const std::vector<SubscriptionAlias>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    return ftxui::text("");
+  }
 
   [[nodiscard]] auto json() const -> nlohmann::json {
     nlohmann::json payload = nlohmann::json::array();
@@ -369,6 +549,14 @@ public:
     return rows;
   }
 
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    return table();
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    return {};
+  }
+
 private:
   const std::vector<SubscriptionAlias>& rows_;
 };
@@ -384,16 +572,19 @@ void render_rows(const RowsView& rows, OutputFormat format, std::ostream& out) {
     rows.csv(csv);
     return;
   }
+  case OutputFormat::Markdown:
+    MarkdownTableWriter{}.write(rows.markdown_rows(), out, rows.markdown_footer());
+    return;
   case OutputFormat::Table:
     break;
   }
-  TerminalTableWriter{}.write(rows.table(), out);
+  TerminalTableWriter{}.write(rows.table(), out, rows.footer());
 }
 
 } // namespace
 
-void render_costs(const std::vector<CostComparisonRow>& rows, OutputFormat format, std::ostream& out) {
-  render_rows(CostRowsView(rows), format, out);
+void render_costs(const std::vector<CostComparisonRow>& rows, double projected_total, OutputFormat format, std::ostream& out) {
+  render_rows(CostRowsView(rows, projected_total), format, out);
 }
 
 void render_trends(const std::vector<MonthCost>& rows, OutputFormat format, std::ostream& out) {
@@ -408,6 +599,10 @@ void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, Out
   render_rows(SubscriptionAliasRowsView(rows), format, out);
 }
 
+void render_cost_history(const std::vector<CostSnapshot>& rows, OutputFormat format, std::ostream& out) {
+  render_rows(CostHistoryRowsView(rows), format, out);
+}
+
 void render_help_screen(std::ostream& out) {
   auto document = ftxui::vbox({
                       panel_title("azdash command center"),
@@ -419,12 +614,13 @@ void render_help_screen(std::ostream& out) {
                       command_row("azdash report cost|trend|waste --path <path>", "write PDF reports"),
                       command_row("azdash alias-sub set <alias> <subscription>", "save a subscription alias"),
                       command_row("azdash alias-sub list", "show configured aliases"),
+                      command_row("azdash history", "locally recorded cost snapshots"),
                       command_row("azdash version", "show release banner"),
                       command_row("azdash update", "show upgrade commands"),
                       ftxui::separator(),
                       ftxui::text("Global flags:") | ftxui::bold | ftxui::color(ftxui::Color::White),
                       command_row("--subscription <id-name-or-alias>", "Azure subscription selector"),
-                      command_row("-o, --output <table|json|csv>", "table is styled; json/csv stay script-safe"),
+                      command_row("-o, --output <table|json|csv|markdown>", "table is styled; json/csv/markdown stay script-safe"),
                       command_row("--path <file-or-directory>", "PDF output destination"),
                       ftxui::separator(),
                       ftxui::text("Waste checks: advisor compute network storage appservice database") |

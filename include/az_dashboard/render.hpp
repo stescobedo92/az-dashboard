@@ -14,7 +14,7 @@ namespace azdash {
  * @param format Desired output format.
  * @param out Output stream.
  */
-void render_costs(const std::vector<CostComparisonRow>& rows, OutputFormat format, std::ostream& out);
+void render_costs(const std::vector<CostComparisonRow>& rows, double projected_total, OutputFormat format, std::ostream& out);
 
 /**
  * @brief Renders trend rows to an output stream.
@@ -39,6 +39,14 @@ void render_waste(const std::vector<WasteFinding>& rows, OutputFormat format, st
  * @param out Output stream.
  */
 void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, OutputFormat format, std::ostream& out);
+
+/**
+ * @brief Renders locally recorded cost snapshots to an output stream.
+ * @param rows Cost snapshots in append order.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_cost_history(const std::vector<CostSnapshot>& rows, OutputFormat format, std::ostream& out);
 
 /**
  * @brief Renders interactive help.

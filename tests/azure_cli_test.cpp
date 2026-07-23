@@ -58,7 +58,7 @@ TEST(AzureCliTest, AccountParsesJson) {
 TEST(AzureCliTest, AccountCommandIncludesSubscriptionAndTenant) {
   auto runner = std::make_shared<FakeRunner>(std::vector<azdash::CommandResult>{{0, "{}", ""}});
   azdash::CliOptions options;
-  options.subscription = "sub-1";
+  options.subscriptions = {"sub-1"};
   options.tenant = "tenant-1";
 
   (void)make_client(runner).account(options);
@@ -75,7 +75,7 @@ TEST(AzureCliTest, AccountCommandIncludesSubscriptionAndTenant) {
 TEST(AzureCliTest, CostCommandIncludesSubscriptionAndTenant) {
   auto runner = std::make_shared<FakeRunner>(std::vector<azdash::CommandResult>{{0, "[]", ""}});
   azdash::CliOptions options;
-  options.subscription = "sub-1";
+  options.subscriptions = {"sub-1"};
   options.tenant = "tenant-1";
 
   (void)make_client(runner).current_month_costs(options);
@@ -95,7 +95,7 @@ TEST(AzureCliTest, CostCommandIncludesSubscriptionAndTenant) {
 TEST(AzureCliTest, UnsafeLookingSubscriptionIsPassedAsTypedArgument) {
   auto runner = std::make_shared<FakeRunner>(std::vector<azdash::CommandResult>{{0, "{}", ""}});
   azdash::CliOptions options;
-  options.subscription = "sub;rm";
+  options.subscriptions = {"sub;rm"};
 
   EXPECT_NO_THROW((void)make_client(runner).account(options));
   ASSERT_EQ(runner->commands.size(), 1);
@@ -125,7 +125,7 @@ TEST(AzureCliTest, NonzeroExitRedactsSensitiveArgumentsAndIncludesStderr) {
       {2, "stdout mentions sub-secret", "stderr mentions tenant-secret and sub-secret"},
   });
   azdash::CliOptions options;
-  options.subscription = "sub-secret";
+  options.subscriptions = {"sub-secret"};
   options.tenant = "tenant-secret";
 
   try {
@@ -162,6 +162,32 @@ TEST(AzureCliTest, CurrentMonthCostsAggregatesDuplicateServices) {
   ASSERT_NE(storage, costs.end());
   EXPECT_DOUBLE_EQ(virtual_machines->cost, 6.0);
   EXPECT_DOUBLE_EQ(storage->cost, 1.0);
+}
+
+TEST(AzureCliTest, CurrentMonthCostsGroupByResourceGroupUsesIdAndDirectField) {
+  auto runner = std::make_shared<FakeRunner>(std::vector<azdash::CommandResult>{
+      {0,
+       R"([{"properties":{"consumedService":"VM","pretaxCost":2.0,"instanceId":"/subscriptions/s/resourceGroups/RG-App/providers/Microsoft.Compute/virtualMachines/vm1"}},)"
+       R"({"properties":{"consumedService":"VM","pretaxCost":4.0,"instanceId":"/subscriptions/s/resourcegroups/rg-app/providers/Microsoft.Compute/disks/d1"}},)"
+       R"({"properties":{"consumedService":"Storage","pretaxCost":3.0,"resourceGroup":"RG-Data"}},)"
+       R"({"properties":{"consumedService":"CDN","pretaxCost":1.5}}])",
+       ""},
+  });
+  azdash::CliOptions options;
+  options.group_by = azdash::GroupBy::ResourceGroup;
+
+  const auto costs = make_client(runner).current_month_costs(options);
+
+  ASSERT_EQ(costs.size(), 3);
+  const auto app = std::ranges::find(costs, "rg-app", &azdash::ServiceCost::service);
+  const auto data = std::ranges::find(costs, "rg-data", &azdash::ServiceCost::service);
+  const auto ungrouped = std::ranges::find(costs, "ungrouped", &azdash::ServiceCost::service);
+  ASSERT_NE(app, costs.end());
+  ASSERT_NE(data, costs.end());
+  ASSERT_NE(ungrouped, costs.end());
+  EXPECT_DOUBLE_EQ(app->cost, 6.0);
+  EXPECT_DOUBLE_EQ(data->cost, 3.0);
+  EXPECT_DOUBLE_EQ(ungrouped->cost, 1.5);
 }
 
 TEST(AzureCliTest, WasteFindingsDetectsAdvisorAndResourceHeuristics) {

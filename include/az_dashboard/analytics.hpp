@@ -158,4 +158,37 @@ auto compare_costs(const std::vector<ServiceCost>& current,
  */
 auto total_cost(const std::vector<ServiceCost>& costs) -> double;
 
+/**
+ * @brief Computes end-of-month projected cost based on run rate.
+ * @param current_total Cost elapsed in the current month.
+ * @return Projected total at the end of the month.
+ */
+auto compute_projection(double current_total) -> double;
+
+/**
+ * @brief Computes the arithmetic mean.
+ * @param values Input values.
+ * @return Mean, or 0.0 for an empty input.
+ */
+auto mean(const std::vector<double>& values) -> double;
+
+/**
+ * @brief Computes the sample standard deviation.
+ * @param values Input values.
+ * @return Sample standard deviation, or 0.0 for fewer than two values.
+ */
+auto sample_stddev(const std::vector<double>& values) -> double;
+
+/**
+ * @brief Scores a cost total against past month totals.
+ * @param past_totals Totals for completed months.
+ * @param evaluated_total Total under test, usually the projected current month.
+ * @param zscore_threshold Absolute z-score treated as anomalous.
+ * @return Assessment with baseline statistics. Falls back to a 20 percent
+ * deviation rule when the past totals have zero variance.
+ */
+auto assess_cost_anomaly(const std::vector<double>& past_totals,
+                         double evaluated_total,
+                         double zscore_threshold = 2.0) -> CostAnomalyAssessment;
+
 } // namespace azdash

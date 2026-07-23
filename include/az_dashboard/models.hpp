@@ -1,6 +1,8 @@
 #pragma once
 
 #include <chrono>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,13 +16,15 @@ namespace azdash {
 enum class OutputFormat {
   Table,
   Json,
-  Csv
+  Csv,
+  Markdown
 };
 
 /**
  * @brief Top-level command selected by the user.
  */
 enum class CommandKind {
+  Help,
   Cost,
   Trend,
   Waste,
@@ -30,7 +34,18 @@ enum class CommandKind {
   AliasSub,
   Version,
   Update,
-  Help
+  Report,
+  CostAnomaly,
+  History,
+  UI
+};
+
+/**
+ * @brief Dimension used to aggregate cost rows.
+ */
+enum class GroupBy {
+  Service,
+  ResourceGroup
 };
 
 /**
@@ -60,15 +75,21 @@ struct SubscriptionAlias {
 struct CliOptions {
   CommandKind command{CommandKind::Help};
   OutputFormat output{OutputFormat::Table};
-  std::string subscription;
+  std::vector<std::string> subscriptions;
+  bool all_subscriptions{false};
   std::string tenant;
   std::string report_path;
   AliasSubAction alias_action{AliasSubAction::List};
   std::string alias_name;
   std::string alias_subscription;
   std::vector<std::string> selectors;
+  GroupBy group_by{GroupBy::Service};
+  std::vector<std::string> group_by_tags;
+  std::vector<std::string> filter_tags;
   int function_memory_threshold_percent{10};
   int secrets_idle_days{90};
+  std::optional<double> fail_if_exceeds_cost;
+  std::string remediation_path;
 };
 
 // Azure analysis domain models.
@@ -89,6 +110,7 @@ struct AccountInfo {
 struct ServiceCost {
   std::string service;
   double cost{0.0};
+  std::map<std::string, std::string> tags;
 };
 
 /**
@@ -122,6 +144,28 @@ struct WasteFinding {
   std::string location;
   std::string recommendation;
   double estimated_monthly_savings{0.0};
+};
+
+/**
+ * @brief Statistical verdict for a cost anomaly check.
+ */
+struct CostAnomalyAssessment {
+  bool enough_data{false};
+  bool anomalous{false};
+  double zscore{0.0};
+  double mean{0.0};
+  double stddev{0.0};
+  double evaluated_total{0.0};
+};
+
+/**
+ * @brief Point-in-time record of a cost run kept in the local history store.
+ */
+struct CostSnapshot {
+  std::string timestamp;
+  std::string subscription;
+  double total{0.0};
+  std::vector<ServiceCost> services;
 };
 
 /**

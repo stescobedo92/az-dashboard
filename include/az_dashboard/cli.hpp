@@ -85,6 +85,17 @@ public:
 };
 
 /**
+ * @brief Cost snapshot history required by cost and history workflows.
+ */
+class ICliCostHistoryStore {
+public:
+  virtual ~ICliCostHistoryStore() = default;
+
+  virtual void record(const CostSnapshot& snapshot) const = 0;
+  [[nodiscard]] virtual auto snapshots() const -> std::vector<CostSnapshot> = 0;
+};
+
+/**
  * @brief Runtime dependencies used by the CLI dispatcher.
  */
 struct CliRuntime {
@@ -96,6 +107,7 @@ struct CliRuntime {
   const ICliWasteProvider& waste_provider;
   const ICliReportWriter& report_writer;
   const ICliSubscriptionAliasStore& alias_store;
+  const ICliCostHistoryStore& history_store;
 };
 
 /**

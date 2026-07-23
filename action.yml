@@ -1,0 +1,134 @@
+name: "azdash cost report"
+description: >-
+  Run azdash against an Azure subscription and publish a Markdown cost report
+  to the job summary and, optionally, as a sticky pull request comment.
+branding:
+  icon: bar-chart-2
+  color: blue
+
+inputs:
+  version:
+    description: "azdash release tag to install (for example v0.1.0). Defaults to the latest release."
+    required: false
+    default: latest
+  args:
+    description: >-
+      Extra arguments appended to azdash cost, for example
+      "--subscription my-sub --group-by resource-group".
+    required: false
+    default: ""
+  fail-if-exceeds:
+    description: "Fail the action when the current month cost exceeds this amount."
+    required: false
+    default: ""
+  github-token:
+    description: "Token used to publish the report as a pull request comment. Leave empty to skip commenting."
+    required: false
+    default: ""
+
+outputs:
+  report:
+    description: "The generated Markdown cost report."
+    value: ${{ steps.run-azdash.outputs.report }}
+  exit-code:
+    description: "Exit code returned by azdash (2 means the fail-if-exceeds gate tripped)."
+    value: ${{ steps.run-azdash.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install azdash
+      shell: bash
+      env:
+        AZDASH_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" != "Linux" ]; then
+          echo "::error::this action currently supports Linux runners only"
+          exit 1
+        fi
+        if [ "$AZDASH_VERSION" = "latest" ]; then
+          url="https://github.com/stescobedo92/az-dashboard/releases/latest/download/azdash-ubuntu-latest.tar.gz"
+        else
+          url="https://github.com/stescobedo92/az-dashboard/releases/download/${AZDASH_VERSION}/azdash-ubuntu-latest.tar.gz"
+        fi
+        dest="${RUNNER_TEMP}/azdash-install"
+        mkdir -p "$dest"
+        curl -fsSL "$url" -o "${dest}/azdash.tar.gz"
+        tar -xzf "${dest}/azdash.tar.gz" -C "$dest"
+        binary="$(find "$dest" -type f -name azdash | head -n 1)"
+        if [ -z "$binary" ]; then
+          echo "::error::azdash binary not found in release archive"
+          exit 1
+        fi
+        chmod +x "$binary"
+        dirname "$binary" >> "$GITHUB_PATH"
+
+    - name: Run azdash cost
+      id: run-azdash
+      shell: bash
+      env:
+        AZDASH_ARGS: ${{ inputs.args }}
+        AZDASH_FAIL_IF_EXCEEDS: ${{ inputs.fail-if-exceeds }}
+      run: |
+        set -uo pipefail
+        gate=()
+        if [ -n "$AZDASH_FAIL_IF_EXCEEDS" ]; then
+          gate+=(--fail-if-exceeds "$AZDASH_FAIL_IF_EXCEEDS")
+        fi
+        # shellcheck disable=SC2086
+        azdash --output markdown ${AZDASH_ARGS} "${gate[@]}" cost > azdash-cost.md
+        exit_code=$?
+        {
+          echo "## Azure cost report"
+          echo
+          cat azdash-cost.md
+        } >> "$GITHUB_STEP_SUMMARY"
+        {
+          echo "report<<AZDASH_REPORT_EOF"
+          cat azdash-cost.md
+          echo "AZDASH_REPORT_EOF"
+        } >> "$GITHUB_OUTPUT"
+        echo "exit-code=${exit_code}" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on pull request
+      if: ${{ inputs.github-token != '' && github.event_name == 'pull_request' }}
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- azdash-cost-report -->';
+          const report = fs.readFileSync('azdash-cost.md', 'utf8');
+          const body = `${marker}\n## Azure cost report\n\n${report}`;
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          const existing = comments.find((comment) => comment.body && comment.body.startsWith(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Enforce cost gate
+      shell: bash
+      env:
+        AZDASH_EXIT_CODE: ${{ steps.run-azdash.outputs.exit-code }}
+      run: |
+        if [ "$AZDASH_EXIT_CODE" != "0" ]; then
+          echo "::error::azdash exited with code ${AZDASH_EXIT_CODE}"
+          exit "$AZDASH_EXIT_CODE"
+        fi

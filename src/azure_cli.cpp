@@ -89,6 +89,33 @@ auto json_number(const nlohmann::json& object, std::initializer_list<const char*
   return 0.0;
 }
 
+auto parse_tags(const nlohmann::json& object) -> std::map<std::string, std::string> {
+  std::map<std::string, std::string> tags;
+  auto try_parse = [&](const nlohmann::json& obj) {
+    if (obj.contains("tags")) {
+      if (obj.at("tags").is_object()) {
+        for (const auto& [key, value] : obj.at("tags").items()) {
+          if (value.is_string()) tags[key] = value.get<std::string>();
+        }
+      } else if (obj.at("tags").is_string()) {
+        try {
+          auto parsed = nlohmann::json::parse(obj.at("tags").get<std::string>());
+          if (parsed.is_object()) {
+            for (const auto& [key, value] : parsed.items()) {
+              if (value.is_string()) tags[key] = value.get<std::string>();
+            }
+          }
+        } catch (...) {}
+      }
+    }
+  };
+  try_parse(object);
+  if (object.contains("properties") && object.at("properties").is_object()) {
+    try_parse(object.at("properties"));
+  }
+  return tags;
+}
+
 auto normalize_usage_item(const nlohmann::json& item) -> nlohmann::json {
   if (item.contains("properties") && item.at("properties").is_object()) {
     return item.at("properties");
@@ -96,7 +123,26 @@ auto normalize_usage_item(const nlohmann::json& item) -> nlohmann::json {
   return item;
 }
 
-auto parse_usage_costs(const nlohmann::json& payload) -> std::vector<ServiceCost> {
+auto resource_group_from_usage(const nlohmann::json& properties) -> std::string {
+  constexpr std::string_view kUngrouped{"ungrouped"};
+  const auto direct = json_string(properties, {"resourceGroup", "resourceGroupName"});
+  if (!direct.empty()) {
+    return detail::normalize_selector(direct);
+  }
+
+  const auto id = detail::normalize_selector(json_string(properties, {"instanceId", "resourceId"}));
+  constexpr std::string_view marker{"/resourcegroups/"};
+  const auto marker_start = id.find(marker);
+  if (marker_start == std::string::npos) {
+    return std::string{kUngrouped};
+  }
+  const auto name_start = marker_start + marker.size();
+  const auto name_end = id.find('/', name_start);
+  const auto name = id.substr(name_start, name_end == std::string::npos ? std::string::npos : name_end - name_start);
+  return name.empty() ? std::string{kUngrouped} : name;
+}
+
+auto parse_usage_costs(const nlohmann::json& payload, const CliOptions& options) -> std::vector<ServiceCost> {
   std::vector<ServiceCost> raw;
   if (!payload.is_array()) {
     return raw;
@@ -104,13 +150,45 @@ auto parse_usage_costs(const nlohmann::json& payload) -> std::vector<ServiceCost
 
   for (const auto& item : payload) {
     const auto properties = normalize_usage_item(item);
+    auto tags = parse_tags(item);
+    
+    bool keep = true;
+    for (const auto& filter : options.filter_tags) {
+       auto pos = filter.find('=');
+       if (pos != std::string::npos) {
+          auto key = filter.substr(0, pos);
+          auto val = filter.substr(pos + 1);
+          if (tags.find(key) == tags.end() || tags.at(key) != val) {
+              keep = false;
+              break;
+          }
+       }
+    }
+    if (!keep) continue;
+
     auto service = json_string(properties, {"consumedService", "meterCategory", "serviceName", "publisherName"});
     if (service.empty()) {
       service = "Unclassified";
     }
 
+    if (options.group_by == GroupBy::ResourceGroup) {
+      service = resource_group_from_usage(properties);
+    }
+
+    if (!options.group_by_tags.empty()) {
+       std::string group_name = "";
+       for (const auto& tag_key : options.group_by_tags) {
+           if (tags.contains(tag_key)) {
+               group_name += (group_name.empty() ? "" : " | ") + tags.at(tag_key);
+           } else {
+               group_name += (group_name.empty() ? "" : " | ") + std::string("Untagged");
+           }
+       }
+       service = group_name;
+    }
+
     const auto cost = json_number(properties, {"pretaxCost", "costInBillingCurrency", "cost", "extendedCost"});
-    raw.push_back({service, cost});
+    raw.push_back({service, cost, tags});
   }
 
   const auto totals = aggregate_by(raw, [](const ServiceCost& cost) { return cost.service; },
@@ -250,40 +328,42 @@ auto append_process_output(std::ostringstream& message, const ProcessCommand& co
 
 class AzureCommandBuilder final {
 public:
-  explicit AzureCommandBuilder(const CliOptions& options) : options_(options) {}
+  AzureCommandBuilder() = default;
 
-  [[nodiscard]] auto account_show() const -> ProcessCommand {
-    return build({"account", "show"});
+  [[nodiscard]] auto account_show(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
+    return build({"account", "show"}, sub, tenant);
   }
 
-  [[nodiscard]] auto consumption_usage(std::string start_date, std::string end_date) const -> ProcessCommand {
+  [[nodiscard]] auto account_list() const -> ProcessCommand {
+    return build({"account", "list"}, "", "");
+  }
+
+  [[nodiscard]] auto consumption_usage(const std::string& sub, const std::string& tenant, std::string start_date, std::string end_date) const -> ProcessCommand {
     return build({"consumption", "usage", "list", "--start-date", std::move(start_date), "--end-date",
-                  std::move(end_date)});
+                  std::move(end_date)}, sub, tenant);
   }
 
-  [[nodiscard]] auto advisor_cost_recommendations() const -> ProcessCommand {
-    return build({"advisor", "recommendation", "list", "--category", "Cost"});
+  [[nodiscard]] auto advisor_cost_recommendations(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
+    return build({"advisor", "recommendation", "list", "--category", "Cost"}, sub, tenant);
   }
 
-  [[nodiscard]] auto resource_list() const -> ProcessCommand {
-    return build({"resource", "list"});
+  [[nodiscard]] auto resource_list(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
+    return build({"resource", "list"}, sub, tenant);
   }
 
-  [[nodiscard]] auto vm_list_with_power_state() const -> ProcessCommand {
-    return build({"vm", "list", "-d"});
+  [[nodiscard]] auto vm_list_with_power_state(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
+    return build({"vm", "list", "-d"}, sub, tenant);
   }
 
 private:
-  const CliOptions& options_;
-
-  [[nodiscard]] auto build(std::vector<std::string> arguments) const -> ProcessCommand {
-    if (!options_.subscription.empty()) {
+  [[nodiscard]] auto build(std::vector<std::string> arguments, const std::string& subscription, const std::string& tenant) const -> ProcessCommand {
+    if (!subscription.empty()) {
       arguments.emplace_back("--subscription");
-      arguments.push_back(options_.subscription);
+      arguments.push_back(subscription);
     }
-    if (!options_.tenant.empty()) {
+    if (!tenant.empty()) {
       arguments.emplace_back("--tenant");
-      arguments.push_back(options_.tenant);
+      arguments.push_back(tenant);
     }
     arguments.emplace_back("-o");
     arguments.emplace_back("json");
@@ -342,10 +422,31 @@ AzureCliClient::AzureCliClient(std::shared_ptr<ICommandRunner> runner) : runner_
   }
 }
 
+namespace {
+auto get_target_subscriptions(const CliOptions& options, const AzureJsonCommandExecutor& executor) -> std::vector<std::string> {
+  if (options.all_subscriptions) {
+    AzureCommandBuilder commands;
+    auto payload = executor.run(commands.account_list());
+    std::vector<std::string> subs;
+    if (payload.is_array()) {
+      for (const auto& item : payload) {
+        subs.push_back(json_string(item, {"id"}));
+      }
+    }
+    return subs.empty() ? std::vector<std::string>{""} : subs;
+  }
+  if (!options.subscriptions.empty()) {
+    return options.subscriptions;
+  }
+  return {""};
+}
+} // namespace
+
 auto AzureCliClient::account(const CliOptions& options) const -> AccountInfo {
-  const AzureCommandBuilder commands{options};
+  const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
-  const auto payload = executor.run(commands.account_show());
+  auto subs = get_target_subscriptions(options, executor);
+  const auto payload = executor.run(commands.account_show(subs.front(), options.tenant));
   return {
       json_string(payload, {"id"}),
       json_string(payload, {"name"}),
@@ -355,50 +456,100 @@ auto AzureCliClient::account(const CliOptions& options) const -> AccountInfo {
 }
 
 auto AzureCliClient::current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> {
-  const AzureCommandBuilder commands{options};
+  const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
   const auto start = civil_date(0, true);
   const auto end = civil_date(0, false);
-  const auto payload = executor.run(commands.consumption_usage(start, end));
-  return parse_usage_costs(payload);
+  auto subs = get_target_subscriptions(options, executor);
+  
+  std::vector<ServiceCost> combined;
+  for (const auto& sub : subs) {
+    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
+    auto costs = parse_usage_costs(payload, options);
+    combined.insert(combined.end(), costs.begin(), costs.end());
+  }
+  
+  const auto totals = aggregate_by(combined, [](const ServiceCost& cost) { return cost.service; },
+                                   [](const ServiceCost& cost) { return cost.cost; });
+  std::vector<ServiceCost> results;
+  for (const auto& [service, cost] : totals) {
+    results.push_back({service, cost});
+  }
+  return results;
 }
 
 auto AzureCliClient::previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> {
-  const AzureCommandBuilder commands{options};
+  const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
   const auto start = civil_date(-1, true);
   const auto end = civil_date(-1, false);
-  const auto payload = executor.run(commands.consumption_usage(start, end));
-  return parse_usage_costs(payload);
+  auto subs = get_target_subscriptions(options, executor);
+
+  std::vector<ServiceCost> combined;
+  for (const auto& sub : subs) {
+    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
+    auto costs = parse_usage_costs(payload, options);
+    combined.insert(combined.end(), costs.begin(), costs.end());
+  }
+
+  const auto totals = aggregate_by(combined, [](const ServiceCost& cost) { return cost.service; },
+                                   [](const ServiceCost& cost) { return cost.cost; });
+  std::vector<ServiceCost> results;
+  for (const auto& [service, cost] : totals) {
+    results.push_back({service, cost});
+  }
+  return results;
 }
 
 auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> {
-  const AzureCommandBuilder commands{options};
+  const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
+  auto subs = get_target_subscriptions(options, executor);
+  
   std::vector<MonthCost> trends;
   for (auto offset = -5; offset <= 0; ++offset) {
     const auto start = civil_date(offset, true);
     const auto end = offset == 0 ? civil_date(0, false) : civil_date(offset + 1, true);
-    const auto payload = executor.run(commands.consumption_usage(start, end));
-    auto services = parse_usage_costs(payload);
-    services = filter_selected(services, options.selectors, [](const ServiceCost& cost) { return cost.service; });
-    trends.push_back({month_label(offset), total_cost(services), services});
+    
+    std::vector<ServiceCost> combined;
+    for (const auto& sub : subs) {
+      const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
+      auto services = parse_usage_costs(payload, options);
+      combined.insert(combined.end(), services.begin(), services.end());
+    }
+    
+    const auto totals = aggregate_by(combined, [](const ServiceCost& cost) { return cost.service; },
+                                     [](const ServiceCost& cost) { return cost.cost; });
+    std::vector<ServiceCost> aggregated_services;
+    for (const auto& [service, cost] : totals) {
+      aggregated_services.push_back({service, cost});
+    }
+    
+    aggregated_services = filter_selected(aggregated_services, options.selectors, [](const ServiceCost& cost) { return cost.service; });
+    trends.push_back({month_label(offset), total_cost(aggregated_services), aggregated_services});
   }
   return trends;
 }
 
 auto AzureCliClient::waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> {
-  const AzureCommandBuilder commands{options};
+  const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
+  auto subs = get_target_subscriptions(options, executor);
+  
   std::vector<WasteFinding> findings;
-
-  const std::array scans{
-      WasteScan{commands.advisor_cost_recommendations(), append_advisor_findings},
-      WasteScan{commands.resource_list(), append_resource_heuristics},
-      WasteScan{commands.vm_list_with_power_state(), append_vm_heuristics},
-  };
-  for (const auto& scan : scans) {
-    scan.detect(executor.run(scan.command), findings);
+  for (const auto& sub : subs) {
+    const std::array scans{
+        WasteScan{commands.advisor_cost_recommendations(sub, options.tenant), append_advisor_findings},
+        WasteScan{commands.resource_list(sub, options.tenant), append_resource_heuristics},
+        WasteScan{commands.vm_list_with_power_state(sub, options.tenant), append_vm_heuristics},
+    };
+    for (const auto& scan : scans) {
+      try {
+        scan.detect(executor.run(scan.command), findings);
+      } catch (const std::exception&) {
+        // Skip failures on individual subscriptions for waste
+      }
+    }
   }
 
   return filter_selected(findings, options.selectors, [](const WasteFinding& finding) { return finding.check; });

@@ -50,6 +50,51 @@ TEST(AnalyticsTest, CompareCostsByUsesConstrainedSelectorsForExternalRows) {
   EXPECT_DOUBLE_EQ(rows[0].delta_percent, 25.0);
 }
 
+TEST(AnalyticsTest, MeanAndSampleStddevComputeBasicStatistics) {
+  const std::vector<double> values{100.0, 110.0, 90.0, 105.0, 95.0};
+
+  EXPECT_DOUBLE_EQ(azdash::mean(values), 100.0);
+  EXPECT_NEAR(azdash::sample_stddev(values), 7.9057, 1e-3);
+  EXPECT_DOUBLE_EQ(azdash::mean({}), 0.0);
+  EXPECT_DOUBLE_EQ(azdash::sample_stddev({42.0}), 0.0);
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyFlagsHighZScore) {
+  const auto assessment = azdash::assess_cost_anomaly({100.0, 110.0, 90.0, 105.0, 95.0}, 150.0);
+
+  EXPECT_TRUE(assessment.enough_data);
+  EXPECT_TRUE(assessment.anomalous);
+  EXPECT_NEAR(assessment.zscore, 6.32, 1e-2);
+  EXPECT_DOUBLE_EQ(assessment.mean, 100.0);
+  EXPECT_DOUBLE_EQ(assessment.evaluated_total, 150.0);
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyAcceptsTypicalSpend) {
+  const auto assessment = azdash::assess_cost_anomaly({100.0, 110.0, 90.0, 105.0, 95.0}, 108.0);
+
+  EXPECT_TRUE(assessment.enough_data);
+  EXPECT_FALSE(assessment.anomalous);
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyFlagsSpendCollapse) {
+  const auto assessment = azdash::assess_cost_anomaly({100.0, 110.0, 90.0, 105.0, 95.0}, 40.0);
+
+  EXPECT_TRUE(assessment.anomalous);
+  EXPECT_LT(assessment.zscore, 0.0);
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyFallsBackTo20PercentRuleOnZeroVariance) {
+  EXPECT_TRUE(azdash::assess_cost_anomaly({100.0, 100.0, 100.0}, 125.0).anomalous);
+  EXPECT_FALSE(azdash::assess_cost_anomaly({100.0, 100.0, 100.0}, 115.0).anomalous);
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyRequiresAtLeastTwoPastTotals) {
+  const auto assessment = azdash::assess_cost_anomaly({100.0}, 500.0);
+
+  EXPECT_FALSE(assessment.enough_data);
+  EXPECT_FALSE(assessment.anomalous);
+}
+
 TEST(AnalyticsTest, FilterSelectedIsCaseInsensitive) {
   const std::vector<azdash::WasteFinding> findings{
       {.check = "Compute", .name = "vm-a"},
