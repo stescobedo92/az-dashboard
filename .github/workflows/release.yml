@@ -50,9 +50,11 @@ jobs:
 
       - name: Configure Windows
         if: runner.os == 'Windows'
+        # Let CMake select whichever Visual Studio the runner ships; the
+        # hosted windows-latest image tracks the newest release (VS 2025),
+        # so pinning "Visual Studio 17 2022" breaks when the image rolls.
         run: >
           cmake -S . -B build
-          -G "Visual Studio 17 2022"
           -A x64
           -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake
           -DAZ_DASHBOARD_BUILD_TESTS=ON
