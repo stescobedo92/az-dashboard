@@ -10,8 +10,8 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <ctime>
 #include <filesystem>
-#include <format>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -426,8 +426,16 @@ private:
 }
 
 [[nodiscard]] auto current_utc_timestamp() -> std::string {
-  const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
-  return std::format("{:%FT%TZ}", now);
+  const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm utc{};
+#ifdef _WIN32
+  gmtime_s(&utc, &now);
+#else
+  gmtime_r(&now, &utc);
+#endif
+  std::ostringstream out;
+  out << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
+  return out.str();
 }
 
 [[nodiscard]] auto subscription_label(const std::vector<std::string>& subscriptions) -> std::string {
