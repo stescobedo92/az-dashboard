@@ -137,7 +137,8 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add "manifests/s/stescobedo92/azdash/$env:VERSION"
-          if ((git diff --cached --quiet; $LASTEXITCODE) -eq 0) {
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "winget manifest already up to date."
             exit 0
           }
