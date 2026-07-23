@@ -24,6 +24,8 @@ The implementation is intentionally layered:
 
 ## Features
 
+- `link-account` verifies connectivity to the Azure CLI you signed in with and
+  prints the active subscription, tenant, and user.
 - Comparative cost analytics for current month versus the matching window in
   the previous month, plus a projected end-of-month total.
 - Cost aggregation by service (default) or by resource group with
@@ -127,6 +129,17 @@ Azure cost data is read with `az consumption usage list`; Advisor data is read
 with `az advisor recommendation list`. The Azure CLI documentation currently
 marks Advisor recommendations as GA and Consumption as preview.
 
+## Troubleshooting
+
+- `link-account` fails with "failed to reach the Azure CLI": make sure the Azure
+  CLI is installed and on `PATH`, and that `az login` succeeds. On Windows the
+  CLI ships as `az.cmd`; azdash resolves and launches it for you.
+- Cost or trend commands fail with `RBACAccessDenied`: your signed-in account
+  lacks permission to read consumption data. Ask for the *Cost Management
+  Reader* or *Billing Reader* role on the subscription, or target one where you
+  hold it with `--subscription`. Run `azdash link-account` to confirm which
+  account is active.
+
 ## Build
 
 ```bash
@@ -148,6 +161,9 @@ docker run --rm -it -v "$HOME/.azure:/home/azdash/.azure:ro" azdash cost
 ## Usage
 
 ```bash
+# Confirm azdash can reach the account you authenticated with `az login`
+azdash link-account
+
 # Cost comparison: current month vs previous matching window
 azdash cost
 

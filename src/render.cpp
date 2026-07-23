@@ -608,6 +608,7 @@ void render_help_screen(std::ostream& out) {
                       panel_title("azdash command center"),
                       ftxui::separator(),
                       ftxui::text("Usage:") | ftxui::bold | ftxui::color(ftxui::Color::White),
+                      command_row("azdash link-account", "confirm the active az login"),
                       command_row("azdash cost", "current vs previous spend"),
                       command_row("azdash trend [services...]", "six-month spend trend"),
                       command_row("azdash waste [checks...]", "advisor and waste signals"),

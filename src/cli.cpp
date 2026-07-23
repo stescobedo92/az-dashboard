@@ -225,6 +225,9 @@ private:
     } else if (command == "history") {
       options.command = CommandKind::History;
       parse_flags_only(options, args, index, "history");
+    } else if (command == "link-account" || command == "link") {
+      options.command = CommandKind::LinkAccount;
+      parse_flags_only(options, args, index, "link-account");
     } else if (command == "trend") {
       options.command = CommandKind::Trend;
       collect_selectors(options, args, index);
@@ -483,6 +486,30 @@ auto execute_history(const CliOptions& options, const CliRuntime& runtime) -> in
   return 0;
 }
 
+auto execute_link_account(const CliOptions& options, const CliRuntime& runtime) -> int {
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+
+  AccountInfo account;
+  try {
+    account = runtime.account_provider.account(resolved_options);
+  } catch (const std::exception& error) {
+    std::ostringstream detail;
+    detail << "Could not reach the Azure CLI. Make sure the Azure CLI is installed and run 'az login' first.\n"
+           << error.what();
+    render_error(detail.str(), runtime.err);
+    return 1;
+  }
+
+  std::ostringstream detail;
+  detail << "Subscription: " << (account.subscription_name.empty() ? "<unknown>" : account.subscription_name) << " ("
+         << account.subscription_id << ")\n"
+         << "Tenant: " << account.tenant_id << "\n"
+         << "User: " << (account.user_name.empty() ? "<unknown>" : account.user_name) << "\n"
+         << "azdash will operate against this account. Use --subscription to target another one.";
+  render_success("Connected to Azure", detail.str(), runtime.out);
+  return 0;
+}
+
 auto execute_anomaly(const CliOptions& options, const CliRuntime& runtime) -> int {
   const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
   const auto trends = runtime.trend_provider.six_month_trends(resolved_options);
@@ -700,6 +727,7 @@ constexpr auto screen_workflows = std::array{
     ScreenWorkflowDefinition{CommandKind::Cost, execute_cost},
     ScreenWorkflowDefinition{CommandKind::CostAnomaly, execute_anomaly},
     ScreenWorkflowDefinition{CommandKind::History, execute_history},
+    ScreenWorkflowDefinition{CommandKind::LinkAccount, execute_link_account},
     ScreenWorkflowDefinition{CommandKind::Trend, execute_trend},
     ScreenWorkflowDefinition{CommandKind::Waste, execute_waste},
     ScreenWorkflowDefinition{CommandKind::UI, execute_ui},
@@ -801,6 +829,7 @@ auto help_text() -> std::string {
   return R"(azdash - Azure cost, trend, and waste diagnostics
 
 Usage:
+  azdash link-account
   azdash [global flags] cost
   azdash [global flags] trend [services...]
   azdash [global flags] waste [checks...]

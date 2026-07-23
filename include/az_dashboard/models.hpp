@@ -37,6 +37,7 @@ enum class CommandKind {
   Report,
   CostAnomaly,
   History,
+  LinkAccount,
   UI
 };
 

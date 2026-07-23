@@ -44,8 +44,12 @@ public:
     return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this, *this, *this};
   }
 
-  [[nodiscard]] auto account(const azdash::CliOptions&) const -> azdash::AccountInfo override {
+  [[nodiscard]] auto account(const azdash::CliOptions& options) const -> azdash::AccountInfo override {
     ++account_calls;
+    last_subscription = options.subscriptions.empty() ? std::string{} : options.subscriptions.front();
+    if (account_throws) {
+      throw std::runtime_error("Azure CLI command failed (az account show)");
+    }
     return {.subscription_id = "sub-id", .subscription_name = "Subscription", .tenant_id = "tenant", .user_name = "user"};
   }
 
@@ -162,6 +166,7 @@ public:
   mutable int alias_remove_calls{0};
   bool remove_result{true};
   bool record_throws{false};
+  bool account_throws{false};
   std::vector<azdash::SubscriptionAlias> aliases;
   std::vector<azdash::CostSnapshot> history;
   mutable int record_calls{0};
@@ -252,6 +257,15 @@ TEST(CliTest, ParsesShortOutputFlag) {
 TEST(CliTest, ParsesMarkdownOutputFormat) {
   EXPECT_EQ(parse({"--output", "markdown", "cost"}).output, azdash::OutputFormat::Markdown);
   EXPECT_EQ(parse({"-o", "md", "trend"}).output, azdash::OutputFormat::Markdown);
+}
+
+TEST(CliTest, ParsesLinkAccountCommand) {
+  EXPECT_EQ(parse({"link-account"}).command, azdash::CommandKind::LinkAccount);
+  EXPECT_EQ(parse({"link"}).command, azdash::CommandKind::LinkAccount);
+  const auto with_flags = parse({"link-account", "--subscription", "prod"});
+  EXPECT_EQ(with_flags.command, azdash::CommandKind::LinkAccount);
+  ASSERT_EQ(with_flags.subscriptions.size(), 1);
+  EXPECT_EQ(with_flags.subscriptions[0], "prod");
 }
 
 TEST(CliTest, ParsesHistoryCommand) {
@@ -395,6 +409,32 @@ TEST(CliTest, HistoryCommandRendersStoredSnapshots) {
   EXPECT_EQ(fake.snapshot_list_calls, 1);
   EXPECT_NE(fake.out.str().find("timestamp,subscription,total"), std::string::npos);
   EXPECT_NE(fake.out.str().find("2026-07-01T10:00:00Z,sub-1,10.00"), std::string::npos);
+}
+
+TEST(CliTest, LinkAccountShowsResolvedActiveAccount) {
+  auto options = azdash::CliOptions{.command = azdash::CommandKind::LinkAccount, .subscriptions = {"prod"}};
+  auto fake = FakeCliRuntime();
+  fake.aliases = {azdash::SubscriptionAlias{.alias = "prod", .subscription = "sub-id"}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 0);
+
+  EXPECT_EQ(fake.account_calls, 1);
+  EXPECT_EQ(fake.current_cost_calls, 0);
+  EXPECT_EQ(fake.alias_resolve_calls, 1);
+  EXPECT_EQ(fake.last_subscription, "sub-id");
+  EXPECT_NE(fake.out.str().find("Subscription"), std::string::npos);
+  EXPECT_NE(fake.out.str().find("sub-id"), std::string::npos);
+}
+
+TEST(CliTest, LinkAccountReportsFriendlyErrorWhenAzureUnreachable) {
+  auto options = azdash::CliOptions{.command = azdash::CommandKind::LinkAccount};
+  auto fake = FakeCliRuntime();
+  fake.account_throws = true;
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 1);
+
+  EXPECT_EQ(fake.account_calls, 1);
+  EXPECT_NE(fake.err.str().find("az login"), std::string::npos);
 }
 
 TEST(CliTest, DispatchesAliasSubSetAndListWithoutAzureCalls) {

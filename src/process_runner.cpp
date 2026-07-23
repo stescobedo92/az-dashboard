@@ -1,7 +1,9 @@
 #include "az_dashboard/azure_cli.hpp"
+#include "az_dashboard/windows_command.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <span>
 #include <stdexcept>
@@ -27,6 +29,83 @@
 #endif
 
 namespace azdash {
+
+namespace detail {
+
+auto quote_windows_argument(std::string_view argument) -> std::string {
+  if (argument.empty()) {
+    return "\"\"";
+  }
+
+  const auto needs_quotes = argument.find_first_of(" \t\n\v\"") != std::string_view::npos;
+  if (!needs_quotes) {
+    return std::string(argument);
+  }
+
+  std::string quoted{"\""};
+  auto backslashes = 0;
+  for (const auto character : argument) {
+    if (character == '\\') {
+      ++backslashes;
+      continue;
+    }
+    if (character == '"') {
+      quoted.append(static_cast<std::size_t>(backslashes * 2 + 1), '\\');
+      quoted += character;
+      backslashes = 0;
+      continue;
+    }
+    quoted.append(static_cast<std::size_t>(backslashes), '\\');
+    backslashes = 0;
+    quoted += character;
+  }
+  quoted.append(static_cast<std::size_t>(backslashes * 2), '\\');
+  quoted += '"';
+  return quoted;
+}
+
+// Always wraps a token in double quotes using the standard MSVC backslash
+// rules. Unconditional quoting keeps cmd.exe from interpreting separators such
+// as & | < > ( ) that would otherwise be significant on an unquoted token.
+auto quote_windows_argument_always(std::string_view argument) -> std::string {
+  std::string quoted{"\""};
+  auto backslashes = 0;
+  for (const auto character : argument) {
+    if (character == '\\') {
+      ++backslashes;
+      continue;
+    }
+    if (character == '"') {
+      quoted.append(static_cast<std::size_t>(backslashes * 2 + 1), '\\');
+      quoted += character;
+      backslashes = 0;
+      continue;
+    }
+    quoted.append(static_cast<std::size_t>(backslashes), '\\');
+    backslashes = 0;
+    quoted += character;
+  }
+  quoted.append(static_cast<std::size_t>(backslashes * 2), '\\');
+  quoted += '"';
+  return quoted;
+}
+
+auto build_cmd_wrapped_command_line(std::string_view interpreter,
+                                    std::string_view script_path,
+                                    const std::vector<std::string>& arguments) -> std::string {
+  std::string line{interpreter};
+  line += " /d /s /c \"";
+  line += quote_windows_argument_always(script_path);
+  for (const auto& argument : arguments) {
+    line += ' ';
+    line += quote_windows_argument_always(argument);
+  }
+  line += '"';
+  return line;
+}
+
+} // namespace detail
+
 namespace {
 
 constexpr auto kDefaultCommandTimeout = std::chrono::seconds{30};
@@ -112,45 +191,102 @@ private:
   LPPROC_THREAD_ATTRIBUTE_LIST attributes_{nullptr};
 };
 
-auto quote_windows_argument(std::string_view argument) -> std::string {
-  if (argument.empty()) {
-    return "\"\"";
-  }
-
-  const auto needs_quotes = argument.find_first_of(" \t\n\v\"") != std::string_view::npos;
-  if (!needs_quotes) {
-    return std::string(argument);
-  }
-
-  std::string quoted{"\""};
-  auto backslashes = 0;
-  for (const auto character : argument) {
-    if (character == '\\') {
-      ++backslashes;
-      continue;
-    }
-    if (character == '"') {
-      quoted.append(static_cast<std::size_t>(backslashes * 2 + 1), '\\');
-      quoted += character;
-      backslashes = 0;
-      continue;
-    }
-    quoted.append(static_cast<std::size_t>(backslashes), '\\');
-    backslashes = 0;
-    quoted += character;
-  }
-  quoted.append(static_cast<std::size_t>(backslashes * 2), '\\');
-  quoted += '"';
-  return quoted;
-}
-
 auto render_windows_command_line(const ProcessCommand& command) -> std::string {
-  auto rendered = quote_windows_argument(command.executable);
+  auto rendered = detail::quote_windows_argument(command.executable);
   for (const auto& argument : command.arguments) {
     rendered += ' ';
-    rendered += quote_windows_argument(argument);
+    rendered += detail::quote_windows_argument(argument);
   }
   return rendered;
+}
+
+auto ends_with_ci(std::string_view value, std::string_view suffix) -> bool {
+  if (value.size() < suffix.size()) {
+    return false;
+  }
+  const auto offset = value.size() - suffix.size();
+  for (std::size_t index = 0; index < suffix.size(); ++index) {
+    if (std::tolower(static_cast<unsigned char>(value[offset + index])) !=
+        std::tolower(static_cast<unsigned char>(suffix[index]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+auto comspec_path() -> std::string {
+  std::array<char, 1024> buffer{};
+  const auto length = ::GetEnvironmentVariableA("ComSpec", buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (length > 0 && length < buffer.size()) {
+    return std::string(buffer.data(), length);
+  }
+  return "cmd.exe";
+}
+
+auto search_path_for(const std::string& file, const char* extension) -> std::string {
+  std::vector<char> buffer(32768);
+  LPSTR file_part = nullptr;
+  const auto length =
+      ::SearchPathA(nullptr, file.c_str(), extension, static_cast<DWORD>(buffer.size()), buffer.data(), &file_part);
+  if (length == 0 || length >= buffer.size()) {
+    return {};
+  }
+  return std::string(buffer.data(), length);
+}
+
+auto has_file_extension(std::string_view name) -> bool {
+  const auto slash = name.find_last_of("\\/");
+  const auto base = (slash == std::string_view::npos) ? name : name.substr(slash + 1);
+  return base.find('.') != std::string_view::npos;
+}
+
+auto probe_pathext(const std::string& executable) -> std::string {
+  std::array<char, 1024> pathext_buffer{};
+  const auto length =
+      ::GetEnvironmentVariableA("PATHEXT", pathext_buffer.data(), static_cast<DWORD>(pathext_buffer.size()));
+  const std::string pathext = (length > 0 && length < pathext_buffer.size())
+                                  ? std::string(pathext_buffer.data(), length)
+                                  : std::string(".COM;.EXE;.BAT;.CMD");
+
+  std::size_t start = 0;
+  while (start <= pathext.size()) {
+    const auto separator = pathext.find(';', start);
+    const auto extension = pathext.substr(start, separator == std::string::npos ? std::string::npos : separator - start);
+    if (!extension.empty()) {
+      if (auto hit = search_path_for(executable, extension.c_str()); !hit.empty()) {
+        return hit;
+      }
+    }
+    if (separator == std::string::npos) {
+      break;
+    }
+    start = separator + 1;
+  }
+  return {};
+}
+
+// Resolves an executable name to a full path the way a shell would, consulting
+// PATH and PATHEXT. CreateProcess itself only appends ".exe", so this is what
+// lets us find and launch batch launchers such as the Azure CLI's az.cmd.
+//
+// PATHEXT extensions are probed before a bare, extensionless match: the Azure
+// CLI ships both az.cmd (the Windows launcher) and an extensionless az (a shell
+// script) in the same directory, and only the former can be executed here.
+auto resolve_windows_executable(const std::string& executable) -> std::string {
+  if (has_file_extension(executable)) {
+    if (auto direct = search_path_for(executable, nullptr); !direct.empty()) {
+      return direct;
+    }
+  }
+
+  if (auto hit = probe_pathext(executable); !hit.empty()) {
+    return hit;
+  }
+
+  if (auto direct = search_path_for(executable, nullptr); !direct.empty()) {
+    return direct;
+  }
+  return {};
 }
 
 auto make_windows_pipe() -> std::pair<WindowsHandle, WindowsHandle> {
@@ -227,7 +363,25 @@ auto run_process(const ProcessCommand& command, const ProcessRunnerOptions& opti
   if (!stdin_handle.valid()) {
     return {1, "", "failed to open null stdin"};
   }
-  auto command_line = render_windows_command_line(command);
+
+  // On Windows the Azure CLI ships as az.cmd, and CreateProcess cannot launch a
+  // batch script directly. Resolve the real target and, when it is a .cmd/.bat
+  // launcher, run it through cmd.exe with typed arguments kept inert.
+  const auto resolved_executable = resolve_windows_executable(command.executable);
+  std::string application_name;
+  std::string command_line;
+  if (!resolved_executable.empty() &&
+      (ends_with_ci(resolved_executable, ".cmd") || ends_with_ci(resolved_executable, ".bat"))) {
+    application_name = comspec_path();
+    command_line = detail::build_cmd_wrapped_command_line(application_name, resolved_executable, command.arguments);
+  } else {
+    application_name = resolved_executable;
+    auto direct_command = command;
+    if (!resolved_executable.empty()) {
+      direct_command.executable = resolved_executable;
+    }
+    command_line = render_windows_command_line(direct_command);
+  }
 
   std::array<HANDLE, 3> inherited_handles{stdin_handle.get(), stdout_write.get(), stderr_write.get()};
   ProcThreadAttributeList handle_list;
@@ -244,7 +398,8 @@ auto run_process(const ProcessCommand& command, const ProcessRunnerOptions& opti
   startup_info.lpAttributeList = handle_list.get();
 
   PROCESS_INFORMATION process_info{};
-  if (::CreateProcessA(nullptr, command_line.data(), nullptr, nullptr, TRUE,
+  const LPCSTR application = application_name.empty() ? nullptr : application_name.c_str();
+  if (::CreateProcessA(application, command_line.data(), nullptr, nullptr, TRUE,
                        CREATE_NEW_PROCESS_GROUP | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
                        &startup_info.StartupInfo, &process_info) == 0) {
     return {1, "", "failed to create process"};

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project(
   az-dashboard
-  VERSION 0.1.0
+  VERSION 0.2.0
   DESCRIPTION "Azure cost, trend, and waste diagnostics CLI"
   LANGUAGES CXX
 )
@@ -124,6 +124,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/azure_cli_test.cpp
     tests/cli_test.cpp
     tests/history_test.cpp
+    tests/process_runner_test.cpp
     tests/render_test.cpp
     tests/report_test.cpp
     tests/subscription_aliases_test.cpp
