@@ -57,6 +57,14 @@ void render_cost_history(const std::vector<CostSnapshot>& rows, OutputFormat for
 void render_budgets(const std::vector<BudgetInfo>& budgets, OutputFormat format, std::ostream& out);
 
 /**
+ * @brief Renders commitment discount recommendations to an output stream.
+ * @param recommendations Commitment recommendations.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_commitments(const std::vector<CommitmentRecommendation>& recommendations, OutputFormat format, std::ostream& out);
+
+/**
  * @brief Renders interactive help.
  * @param out Output stream.
  */

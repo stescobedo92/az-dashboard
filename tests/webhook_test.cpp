@@ -117,6 +117,22 @@ public:
         {.name = "DefaultBudget", .amount = 1000.0, .current_spend = 300.0, .time_grain = "Monthly", .currency = "USD"}
     };
   }
+
+  [[nodiscard]] auto commitment_recommendations(const azdash::CliOptions&) const
+      -> std::vector<azdash::CommitmentRecommendation> override {
+    return {
+        {.id = "rec-1",
+         .type = "ReservedInstance",
+         .resource_type = "Microsoft.Compute/virtualMachines",
+         .sku = "Standard_D4s_v5",
+         .region = "eastus",
+         .term = "1 Year",
+         .estimated_monthly_savings = 85.0,
+         .estimated_monthly_cost = 140.0,
+         .currency = "USD",
+         .details = "1 Year reservation recommendation"}
+    };
+  }
 };
 
 } // namespace

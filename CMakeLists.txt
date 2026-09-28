@@ -128,6 +128,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/budget_test.cpp
     tests/cache_test.cpp
     tests/cli_test.cpp
+    tests/commitments_test.cpp
     tests/concurrency_test.cpp
     tests/history_test.cpp
     tests/process_runner_test.cpp

@@ -701,6 +701,114 @@ void render_budgets(const std::vector<BudgetInfo>& budgets, OutputFormat format,
   render_rows(BudgetsView(budgets), format, out);
 }
 
+class CommitmentsView {
+public:
+  explicit CommitmentsView(const std::vector<CommitmentRecommendation>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    double total_savings = 0.0;
+    std::string currency = "USD";
+    for (const auto& r : rows_) {
+      total_savings += r.estimated_monthly_savings;
+      if (r.currency != "USD" && !r.currency.empty()) {
+        currency = r.currency;
+      }
+    }
+    return ftxui::hbox({
+        ftxui::text(" Total Potential Monthly Savings: ") | ftxui::bold | ftxui::color(ftxui::Color::Yellow),
+        ftxui::text(NumberFormatter::money(total_savings) + " " + currency) | ftxui::bold | ftxui::color(ftxui::Color::Green),
+    });
+  }
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
+    nlohmann::json payload = nlohmann::json::array();
+    for (const auto& r : rows_) {
+      payload.push_back({
+          {"id", r.id},
+          {"type", r.type},
+          {"resource_type", r.resource_type},
+          {"sku", r.sku},
+          {"region", r.region},
+          {"term", r.term},
+          {"estimated_monthly_savings", r.estimated_monthly_savings},
+          {"estimated_monthly_cost", r.estimated_monthly_cost},
+          {"currency", r.currency},
+          {"details", r.details},
+      });
+    }
+    return payload;
+  }
+
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("type,resource_type,sku,region,term,estimated_monthly_cost,estimated_monthly_savings,currency,details");
+    for (const auto& r : rows_) {
+      csv.row([&r](CsvRowWriter& writer) {
+        writer.escaped_cell(r.type);
+        writer.escaped_cell(r.resource_type);
+        writer.escaped_cell(r.sku);
+        writer.escaped_cell(r.region);
+        writer.escaped_cell(r.term);
+        writer.raw_cell(NumberFormatter::money(r.estimated_monthly_cost));
+        writer.raw_cell(NumberFormatter::money(r.estimated_monthly_savings));
+        writer.escaped_cell(r.currency);
+        writer.escaped_cell(r.details);
+      });
+    }
+  }
+
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{
+        {"Type", "SKU / Scope", "Region", "Term", "Est. Cost", "Monthly Savings"}};
+    for (const auto& r : rows_) {
+      rows.push_back({
+          r.type,
+          r.sku.empty() ? r.resource_type : r.sku,
+          r.region.empty() ? "Global" : r.region,
+          r.term,
+          NumberFormatter::money(r.estimated_monthly_cost) + " " + r.currency,
+          NumberFormatter::money(r.estimated_monthly_savings) + " " + r.currency,
+      });
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{
+        {"Type", "Resource / SKU", "Region", "Term", "Est. Cost", "Monthly Savings", "Details"}};
+    for (const auto& r : rows_) {
+      rows.push_back({
+          r.type,
+          r.sku.empty() ? r.resource_type : r.sku,
+          r.region.empty() ? "Global" : r.region,
+          r.term,
+          NumberFormatter::money(r.estimated_monthly_cost) + " " + r.currency,
+          NumberFormatter::money(r.estimated_monthly_savings) + " " + r.currency,
+          r.details,
+      });
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    double total_savings = 0.0;
+    std::string currency = "USD";
+    for (const auto& r : rows_) {
+      total_savings += r.estimated_monthly_savings;
+      if (r.currency != "USD" && !r.currency.empty()) {
+        currency = r.currency;
+      }
+    }
+    return {"**Total potential monthly savings:** " + NumberFormatter::money(total_savings) + " " + currency};
+  }
+
+private:
+  const std::vector<CommitmentRecommendation>& rows_;
+};
+
+void render_commitments(const std::vector<CommitmentRecommendation>& recommendations, OutputFormat format, std::ostream& out) {
+  render_rows(CommitmentsView(recommendations), format, out);
+}
+
 void render_help_screen(std::ostream& out) {
   auto document = ftxui::vbox({
                       panel_title("azdash command center"),

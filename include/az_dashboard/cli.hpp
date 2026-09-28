@@ -63,6 +63,17 @@ public:
 };
 
 /**
+ * @brief Azure commitment discount recommendations provider.
+ */
+class ICliCommitmentProvider {
+public:
+  virtual ~ICliCommitmentProvider() = default;
+
+  [[nodiscard]] virtual auto commitment_recommendations(const CliOptions& options) const
+      -> std::vector<CommitmentRecommendation> = 0;
+};
+
+/**
  * @brief Report sink required by PDF report workflows.
  */
 class ICliReportWriter {
@@ -115,7 +126,8 @@ class AzureClientAdapter : public ICliAccountProvider,
                            public ICliCostProvider,
                            public ICliTrendProvider,
                            public ICliWasteProvider,
-                           public ICliBudgetProvider {
+                           public ICliBudgetProvider,
+                           public ICliCommitmentProvider {
 public:
   explicit AzureClientAdapter(std::shared_ptr<IAzureClient> client) : client_(std::move(client)) {}
 
@@ -143,6 +155,11 @@ public:
     return client_->budgets(options);
   }
 
+  [[nodiscard]] auto commitment_recommendations(const CliOptions& options) const
+      -> std::vector<CommitmentRecommendation> override {
+    return client_->commitment_recommendations(options);
+  }
+
 private:
   std::shared_ptr<IAzureClient> client_;
 };
@@ -164,6 +181,7 @@ struct CliRuntime {
   std::istream* in{nullptr};
   const ICommandRunner* runner{nullptr};
   const ICliBudgetProvider* budget_provider{nullptr};
+  const ICliCommitmentProvider* commitment_provider{nullptr};
 };
 
 /**

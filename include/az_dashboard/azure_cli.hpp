@@ -65,6 +65,7 @@ public:
   [[nodiscard]] virtual auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> = 0;
   [[nodiscard]] virtual auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> = 0;
   [[nodiscard]] virtual auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> = 0;
+  [[nodiscard]] virtual auto commitment_recommendations(const CliOptions& options) const -> std::vector<CommitmentRecommendation> = 0;
 };
 
 /**
@@ -125,6 +126,13 @@ public:
    * @return Active budget configurations and tracking status.
    */
   [[nodiscard]] auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> override;
+
+  /**
+   * @brief Evaluates commitment discount recommendations (Reserved Instances and Savings Plans).
+   * @param options Parsed CLI options.
+   * @return Active commitment recommendations.
+   */
+  [[nodiscard]] auto commitment_recommendations(const CliOptions& options) const -> std::vector<CommitmentRecommendation> override;
 
 private:
   std::shared_ptr<ICommandRunner> runner_;

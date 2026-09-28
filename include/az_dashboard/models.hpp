@@ -39,7 +39,8 @@ enum class CommandKind {
   History,
   LinkAccount,
   UI,
-  Budget
+  Budget,
+  Commitments
 };
 
 /**
@@ -105,6 +106,8 @@ struct CliOptions {
   ProjectionMode projection_mode{ProjectionMode::Linear};
   std::string management_group;
   std::string budget_filter;
+  std::string commitment_term;
+  double min_savings{0.0};
 };
 
 // Azure analysis domain models.
@@ -176,6 +179,22 @@ struct BudgetInfo {
   std::string start_date;
   std::string end_date;
   std::string currency{"USD"};
+};
+
+/**
+ * @brief Commitment-based discount recommendation (Reserved Instances and Savings Plans).
+ */
+struct CommitmentRecommendation {
+  std::string id;
+  std::string type;            // "ReservedInstance" or "SavingsPlan"
+  std::string resource_type;   // "Microsoft.Compute/virtualMachines", etc.
+  std::string sku;             // "Standard_D4s_v5", etc.
+  std::string region;          // "eastus", etc.
+  std::string term;            // "1 Year" or "3 Years"
+  double estimated_monthly_savings{0.0};
+  double estimated_monthly_cost{0.0};
+  std::string currency{"USD"};
+  std::string details;
 };
 
 /**

@@ -512,6 +512,10 @@ public:
     return build({"consumption", "budget", "list"}, sub, tenant);
   }
 
+  [[nodiscard]] auto consumption_reservation_recommendations(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
+    return build({"consumption", "reservation", "recommendation", "list"}, sub, tenant);
+  }
+
 private:
   [[nodiscard]] auto build(std::vector<std::string> arguments, const std::string& subscription, const std::string& tenant) const -> ProcessCommand {
     if (!subscription.empty()) {
@@ -555,6 +559,14 @@ public:
 private:
   const ICommandRunner& runner_;
 };
+
+auto normalize_term(std::string_view raw) -> std::string {
+  if (raw.find('3') != std::string_view::npos || raw.find("P3Y") != std::string_view::npos ||
+      raw.find("3y") != std::string_view::npos || raw.find("3Y") != std::string_view::npos) {
+    return "3 Years";
+  }
+  return "1 Year";
+}
 
 } // namespace
 
@@ -898,6 +910,130 @@ auto AzureCliClient::budgets(const CliOptions& options) const -> std::vector<Bud
     combined.insert(combined.end(), std::make_move_iterator(b_list.begin()), std::make_move_iterator(b_list.end()));
   }
   return combined;
+}
+
+auto AzureCliClient::commitment_recommendations(const CliOptions& options) const -> std::vector<CommitmentRecommendation> {
+  const AzureCommandBuilder commands;
+  const AzureJsonCommandExecutor executor{*runner_};
+  auto subs = get_target_subscriptions(options, executor);
+
+  auto all_recs = parallel_transform(subs, [&](const std::string& sub) -> std::vector<CommitmentRecommendation> {
+    std::vector<CommitmentRecommendation> sub_recs;
+
+    try {
+      const auto res_payload = executor.run(commands.consumption_reservation_recommendations(sub, options.tenant));
+      if (res_payload.is_array()) {
+        for (const auto& item : res_payload) {
+          const auto& props = (item.contains("properties") && item.at("properties").is_object()) ? item.at("properties") : item;
+          auto sku = json_string(props, {"skuName", "sku"});
+          auto term_raw = json_string(props, {"term"});
+          auto term = normalize_term(term_raw);
+          auto currency = json_string(props, {"currency"});
+          if (currency.empty()) {
+            currency = "USD";
+          }
+
+          double savings = json_number(props, {"netSavings"});
+          double cost = json_number(props, {"totalCostWithReservedInstances", "costWithNoReservedInstances"});
+          auto id = json_string(item, {"id"});
+          auto region = json_string(props, {"region", "location"});
+          if (region.empty()) {
+            region = json_string(item, {"location"});
+          }
+
+          sub_recs.push_back(CommitmentRecommendation{
+              .id = std::move(id),
+              .type = "ReservedInstance",
+              .resource_type = "Microsoft.Compute/virtualMachines",
+              .sku = std::move(sku),
+              .region = std::move(region),
+              .term = std::move(term),
+              .estimated_monthly_savings = savings,
+              .estimated_monthly_cost = cost,
+              .currency = std::move(currency),
+              .details = "Native Azure reservation recommendation based on continuous usage.",
+          });
+        }
+      }
+    } catch (...) {
+    }
+
+    try {
+      const auto adv_payload = executor.run(commands.advisor_cost_recommendations(sub, options.tenant));
+      if (adv_payload.is_array()) {
+        for (const auto& item : adv_payload) {
+          const auto& props = (item.contains("properties") && item.at("properties").is_object()) ? item.at("properties") : item;
+          auto rec_id = json_string(props, {"recommendationTypeId", "id"});
+          auto short_desc = json_string(props, {"shortDescription", "solution"});
+          if (props.contains("shortDescription") && props.at("shortDescription").is_object()) {
+            short_desc = json_string(props.at("shortDescription"), {"solution", "problem"});
+          }
+
+          bool is_ri = rec_id.find("Reservation") != std::string::npos || short_desc.find("Reservation") != std::string::npos || short_desc.find("reserved") != std::string::npos;
+          bool is_sp = rec_id.find("SavingsPlan") != std::string::npos || short_desc.find("Savings Plan") != std::string::npos || short_desc.find("savings plan") != std::string::npos;
+
+          if (is_ri || is_sp) {
+            auto term = normalize_term(short_desc);
+            auto currency = json_string(props, {"currency", "savingsCurrency"});
+            if (currency.empty()) {
+              currency = "USD";
+            }
+            double savings = json_number(props, {"annualSavingsAmount", "savingsAmount"}) / 12.0;
+            if (savings <= 0.0) {
+              savings = json_number(props, {"savingsAmount"});
+            }
+            auto sku = json_string(props, {"impactedValue", "resourceMetadata"});
+            auto region = json_string(props, {"impactedField"});
+            auto id = json_string(item, {"id"});
+
+            sub_recs.push_back(CommitmentRecommendation{
+                .id = std::move(id),
+                .type = is_sp ? "SavingsPlan" : "ReservedInstance",
+                .resource_type = is_sp ? "Microsoft.Billing/savingsPlans" : "Microsoft.Compute/virtualMachines",
+                .sku = std::move(sku),
+                .region = std::move(region),
+                .term = std::move(term),
+                .estimated_monthly_savings = savings,
+                .estimated_monthly_cost = 0.0,
+                .currency = std::move(currency),
+                .details = short_desc.empty() ? "Advisor commitment recommendation." : std::move(short_desc),
+            });
+          }
+        }
+      }
+    } catch (...) {
+    }
+
+    return sub_recs;
+  });
+
+  std::vector<CommitmentRecommendation> combined;
+  for (auto& recs : all_recs) {
+    combined.insert(combined.end(), std::make_move_iterator(recs.begin()), std::make_move_iterator(recs.end()));
+  }
+
+  std::vector<CommitmentRecommendation> filtered;
+  filtered.reserve(combined.size());
+  for (auto& r : combined) {
+    if (options.min_savings > 0.0 && r.estimated_monthly_savings < options.min_savings) {
+      continue;
+    }
+    if (!options.commitment_term.empty()) {
+      auto req_term = normalize_term(options.commitment_term);
+      if (r.term != req_term) {
+        continue;
+      }
+    }
+    filtered.push_back(std::move(r));
+  }
+
+  if (!options.selectors.empty()) {
+    filtered = filter_selected(filtered, options.selectors, [](const CommitmentRecommendation& rec) {
+      return rec.sku.empty() ? rec.type : rec.sku;
+    });
+  }
+
+  return filtered;
 }
 
 } // namespace azdash

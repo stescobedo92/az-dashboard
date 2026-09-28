@@ -166,6 +166,10 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.management_group = require_value(args, index, token);
   } else if (token == "--budget") {
     options.budget_filter = require_value(args, index, token);
+  } else if (token == "--term") {
+    options.commitment_term = require_value(args, index, token);
+  } else if (token == "--min-savings") {
+    options.min_savings = parse_double(args, index, token);
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -261,6 +265,9 @@ private:
       collect_selectors(options, args, index);
     } else if (command == "budget") {
       options.command = CommandKind::Budget;
+      collect_selectors(options, args, index);
+    } else if (command == "commitments" || command == "commitment" || command == "ri" || command == "reservations") {
+      options.command = CommandKind::Commitments;
       collect_selectors(options, args, index);
     } else if (command == "version") {
       options.command = CommandKind::Version;
@@ -898,6 +905,39 @@ auto execute_budget(const CliOptions& options, const CliRuntime& runtime) -> int
   return 0;
 }
 
+auto execute_commitments(const CliOptions& options, const CliRuntime& runtime) -> int {
+  if (!runtime.commitment_provider) {
+    render_error("No commitment provider available in runtime.", runtime.err);
+    return 1;
+  }
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  auto recs = runtime.commitment_provider->commitment_recommendations(resolved_options);
+  render_commitments(recs, options.output, runtime.out);
+
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    double total_savings = 0.0;
+    for (const auto& r : recs) {
+      total_savings += r.estimated_monthly_savings;
+    }
+    const std::string currency = recs.empty() ? "USD" : recs.front().currency;
+    std::ostringstream msg;
+    msg << std::fixed << std::setprecision(2);
+    msg << "Found " << recs.size() << " commitment discount recommendations. Total potential monthly savings: "
+        << total_savings << " " << currency;
+    if (!runtime.webhook_sender->send(options.webhook_url, WebhookPayload{
+        .title = "Azure Commitment Discounts Alert",
+        .status = "info",
+        .subscription = subscription_label(resolved_options.subscriptions),
+        .message = msg.str(),
+        .details = std::to_string(recs.size()) + " recommendations",
+    })) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
+  return 0;
+}
+
 using ScreenWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&);
 using ReportWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&, const AccountInfo&);
 
@@ -920,6 +960,7 @@ constexpr auto screen_workflows = std::array{
     ScreenWorkflowDefinition{CommandKind::Waste, execute_waste},
     ScreenWorkflowDefinition{CommandKind::UI, execute_ui},
     ScreenWorkflowDefinition{CommandKind::Budget, execute_budget},
+    ScreenWorkflowDefinition{CommandKind::Commitments, execute_commitments},
 };
 
 constexpr auto report_workflows = std::array{
@@ -1003,7 +1044,7 @@ auto run(const CliOptions& options) -> int {
   auto runner = ShellCommandRunner();
   auto runtime = CliRuntime{std::cout, std::cerr,     provider,     provider,
                             provider,  provider,      report_writer, alias_store,
-                            history_store, &webhook_sender, &std::cin, &runner, &provider};
+                            history_store, &webhook_sender, &std::cin, &runner, &provider, &provider};
   return run(options, runtime);
 }
 
@@ -1023,6 +1064,7 @@ Usage:
   azdash link-account
   azdash [global flags] cost
   azdash [global flags] budget [names...]
+  azdash [global flags] commitments [skus...]
   azdash [global flags] trend [services...]
   azdash [global flags] waste [checks...]
   azdash [global flags] report cost [--path file-or-directory]
@@ -1040,6 +1082,8 @@ Global flags:
   --all-subscriptions                 Analyze all accessible subscriptions.
   --management-group, --mg <id>       Target an Azure Management Group hierarchy recursively.
   --budget <name>                     Filter Azure budget by name.
+  --term <1yr|3yr>                    Commitment term filter (1 Year or 3 Years).
+  --min-savings <amount>              Minimum monthly savings filter for commitments.
   --tenant <id>                       Reserved for tenant-aware providers.
   -o, --output <table|json|csv|markdown>  Output format. Defaults to table.
   --path <file-or-directory>          Report output path.
