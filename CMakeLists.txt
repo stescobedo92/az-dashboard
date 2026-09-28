@@ -131,6 +131,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/render_test.cpp
     tests/report_test.cpp
     tests/subscription_aliases_test.cpp
+    tests/waste_and_tags_test.cpp
   )
   target_link_libraries(az-dashboard-tests PRIVATE az_dashboard_lib GTest::gtest_main)
   az_dashboard_apply_sanitizers(az-dashboard-tests)

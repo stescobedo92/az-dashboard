@@ -93,6 +93,7 @@ struct CliOptions {
   std::string remediation_path;
   bool no_cache{false};
   bool fast_query{false};
+  bool dry_run{false};
 };
 
 // Azure analysis domain models.

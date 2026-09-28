@@ -144,29 +144,103 @@ auto resource_group_from_usage(const nlohmann::json& properties) -> std::string 
   return name.empty() ? std::string{kUngrouped} : name;
 }
 
+enum class TagFilterOp {
+  Exists,
+  NotExists,
+  EqualAny,
+  NotEqual,
+};
+
+struct CompiledTagFilter {
+  std::string key;
+  TagFilterOp op;
+  std::vector<std::string> values;
+};
+
+[[nodiscard]] auto compile_tag_filters(std::span<const std::string> filter_tags) -> std::vector<CompiledTagFilter> {
+  std::vector<CompiledTagFilter> compiled;
+  compiled.reserve(filter_tags.size());
+  for (const auto& filter : filter_tags) {
+    if (filter.empty()) {
+      continue;
+    }
+    if (filter.front() == '!') {
+      compiled.push_back({filter.substr(1), TagFilterOp::NotExists, {}});
+      continue;
+    }
+    const auto ne_pos = filter.find("!=");
+    if (ne_pos != std::string::npos) {
+      compiled.push_back({filter.substr(0, ne_pos), TagFilterOp::NotEqual, {filter.substr(ne_pos + 2)}});
+      continue;
+    }
+    const auto eq_pos = filter.find('=');
+    if (eq_pos != std::string::npos) {
+      auto key = filter.substr(0, eq_pos);
+      auto val_str = filter.substr(eq_pos + 1);
+      std::vector<std::string> values;
+      std::size_t start = 0;
+      std::size_t comma = 0;
+      while ((comma = val_str.find(',', start)) != std::string::npos) {
+        values.push_back(val_str.substr(start, comma - start));
+        start = comma + 1;
+      }
+      values.push_back(val_str.substr(start));
+      compiled.push_back({std::move(key), TagFilterOp::EqualAny, std::move(values)});
+      continue;
+    }
+    compiled.push_back({filter, TagFilterOp::Exists, {}});
+  }
+  return compiled;
+}
+
+[[nodiscard]] auto matches_tag_filters(const std::map<std::string, std::string>& tags,
+                                       std::span<const CompiledTagFilter> filters) -> bool {
+  for (const auto& filter : filters) {
+    const auto it = tags.find(filter.key);
+    switch (filter.op) {
+      case TagFilterOp::Exists:
+        if (it == tags.end()) {
+          return false;
+        }
+        break;
+      case TagFilterOp::NotExists:
+        if (it != tags.end()) {
+          return false;
+        }
+        break;
+      case TagFilterOp::EqualAny:
+        if (it == tags.end()) {
+          return false;
+        }
+        if (std::ranges::find(filter.values, it->second) == filter.values.end()) {
+          return false;
+        }
+        break;
+      case TagFilterOp::NotEqual:
+        if (it != tags.end() && !filter.values.empty() && it->second == filter.values.front()) {
+          return false;
+        }
+        break;
+    }
+  }
+  return true;
+}
+
 auto parse_usage_costs(const nlohmann::json& payload, const CliOptions& options) -> std::vector<ServiceCost> {
   std::vector<ServiceCost> raw;
   if (!payload.is_array()) {
     return raw;
   }
 
+  const auto compiled_filters = compile_tag_filters(options.filter_tags);
+
   for (const auto& item : payload) {
     const auto properties = normalize_usage_item(item);
     auto tags = parse_tags(item);
-    
-    bool keep = true;
-    for (const auto& filter : options.filter_tags) {
-       auto pos = filter.find('=');
-       if (pos != std::string::npos) {
-          auto key = filter.substr(0, pos);
-          auto val = filter.substr(pos + 1);
-          if (tags.find(key) == tags.end() || tags.at(key) != val) {
-              keep = false;
-              break;
-          }
-       }
+
+    if (!matches_tag_filters(tags, compiled_filters)) {
+      continue;
     }
-    if (!keep) continue;
 
     auto service = json_string(properties, {"consumedService", "meterCategory", "serviceName", "publisherName"});
     if (service.empty()) {
@@ -253,7 +327,12 @@ auto append_resource_heuristics(const nlohmann::json& payload, std::vector<Waste
     const auto location = json_string(item, {"location"});
 
     if (type == "Microsoft.Compute/disks" && (!item.contains("managedBy") || item.at("managedBy").is_null())) {
-      findings.push_back({"compute", id, type, name, location, "Managed disk is not attached to a VM.", 0.0});
+      const auto sku = item.contains("sku") && item.at("sku").is_object() ? json_string(item.at("sku"), {"name"}) : "";
+      if (sku.find("Premium") != std::string::npos || sku.find("Ultra") != std::string::npos) {
+        findings.push_back({"compute", id, type, name, location, "Unattached Premium/Ultra SSD disk is accruing high storage costs while unused.", 0.0});
+      } else {
+        findings.push_back({"compute", id, type, name, location, "Managed disk is not attached to a VM.", 0.0});
+      }
     }
 
     if (type == "Microsoft.Compute/snapshots") {
@@ -264,6 +343,38 @@ auto append_resource_heuristics(const nlohmann::json& payload, std::vector<Waste
         (!item.contains("properties") || !item.at("properties").contains("ipConfiguration") ||
          item.at("properties").at("ipConfiguration").is_null())) {
       findings.push_back({"network", id, type, name, location, "Public IP address is not associated to a resource.", 0.0});
+    }
+
+    if (type == "Microsoft.Network/networkSecurityGroups") {
+      const auto& props = item.contains("properties") && item.at("properties").is_object() ? item.at("properties") : item;
+      const bool has_subnets = props.contains("subnets") && props.at("subnets").is_array() && !props.at("subnets").empty();
+      const bool has_nics = props.contains("networkInterfaces") && props.at("networkInterfaces").is_array() && !props.at("networkInterfaces").empty();
+      if (!has_subnets && !has_nics) {
+        findings.push_back({"network", id, type, name, location, "Network Security Group is not associated to any subnet or NIC.", 0.0});
+      }
+    }
+
+    if (type == "Microsoft.Network/routeTables") {
+      const auto& props = item.contains("properties") && item.at("properties").is_object() ? item.at("properties") : item;
+      const bool has_subnets = props.contains("subnets") && props.at("subnets").is_array() && !props.at("subnets").empty();
+      if (!has_subnets) {
+        findings.push_back({"network", id, type, name, location, "Route table is not associated with any subnet.", 0.0});
+      }
+    }
+
+    if (type == "Microsoft.Network/natGateways") {
+      const auto& props = item.contains("properties") && item.at("properties").is_object() ? item.at("properties") : item;
+      const bool has_subnets = props.contains("subnets") && props.at("subnets").is_array() && !props.at("subnets").empty();
+      if (!has_subnets) {
+        findings.push_back({"network", id, type, name, location, "NAT Gateway has no subnets attached but incurs hourly gateway charges.", 32.40});
+      }
+    }
+
+    if (type == "Microsoft.Web/serverfarms") {
+      const auto& props = item.contains("properties") && item.at("properties").is_object() ? item.at("properties") : item;
+      if (props.contains("numberOfSites") && props.at("numberOfSites").is_number_integer() && props.at("numberOfSites").get<int>() == 0) {
+        findings.push_back({"appservice", id, type, name, location, "App Service Plan has 0 hosted apps but reserves dedicated compute capacity.", 0.0});
+      }
     }
   }
 }

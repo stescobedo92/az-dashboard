@@ -147,6 +147,8 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.no_cache = true;
   } else if (token == "--fast") {
     options.fast_query = true;
+  } else if (token == "--dry-run") {
+    options.dry_run = true;
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -558,9 +560,23 @@ auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int 
   const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
   auto findings = runtime.waste_provider.waste_findings(resolved_options);
   render_waste(findings, options.output, runtime.out);
+
+  if (options.dry_run) {
+    std::ostringstream msg;
+    msg << "Dry run: detected " << findings.size() << " waste items.";
+    if (!options.remediation_path.empty()) {
+      msg << " Remediation script generation to " << options.remediation_path << " skipped.";
+    }
+    render_success("Dry Run Complete", msg.str(), runtime.out);
+    return 0;
+  }
   
   if (!options.remediation_path.empty()) {
-      std::ofstream out(options.remediation_path);
+      const std::filesystem::path rem_path(options.remediation_path);
+      if (!rem_path.parent_path().empty()) {
+        std::filesystem::create_directories(rem_path.parent_path());
+      }
+      std::ofstream out(rem_path);
       out << "#!/bin/bash\n\n";
       for (const auto& finding : findings) {
           if (finding.resource_type == "Microsoft.Compute/disks") {
@@ -569,6 +585,14 @@ auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int 
               out << "az network public-ip delete --ids \"" << finding.resource_id << "\"\n";
           } else if (finding.resource_type == "Microsoft.Compute/snapshots") {
               out << "az snapshot delete --ids \"" << finding.resource_id << "\"\n";
+          } else if (finding.resource_type == "Microsoft.Network/networkSecurityGroups") {
+              out << "az network nsg delete --ids \"" << finding.resource_id << "\"\n";
+          } else if (finding.resource_type == "Microsoft.Network/routeTables") {
+              out << "az network route-table delete --ids \"" << finding.resource_id << "\"\n";
+          } else if (finding.resource_type == "Microsoft.Network/natGateways") {
+              out << "az network nat gateway delete --ids \"" << finding.resource_id << "\"\n";
+          } else if (finding.resource_type == "Microsoft.Web/serverfarms") {
+              out << "# az appservice plan delete --ids \"" << finding.resource_id << "\" --yes\n";
           } else if (finding.resource_type == "Microsoft.Compute/virtualMachines") {
               out << "# az vm delete --ids \"" << finding.resource_id << "\" --yes\n";
           } else {
@@ -865,6 +889,7 @@ Global flags:
   --fail-if-exceeds <cost>            Return exit code 2 if total cost exceeds this amount.
   --no-cache                          Bypass local cache for historical trend data.
   --fast                              Use server-side JMESPath query projection to minimize payload size.
+  --dry-run                           Simulate execution without modifying or creating resources.
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault
