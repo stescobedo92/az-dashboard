@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <string>
+#include <atomic>
 #include <vector>
 
 namespace {
@@ -24,7 +25,7 @@ public:
   }
 
   std::string default_json_;
-  mutable std::size_t call_count{0};
+  mutable std::atomic<std::size_t> call_count{0};
 };
 
 TEST(LocalTrendCacheStoreTest, ReturnsNulloptWhenMissingOrEmpty) {

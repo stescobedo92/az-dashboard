@@ -53,6 +53,7 @@ auto LocalTrendCacheStore::get(const std::string& subscription,
                                const std::string& month,
                                const std::string& dimension) const
     -> std::optional<std::vector<ServiceCost>> {
+  std::lock_guard lock(mutex_);
   const auto key = cache_key(subscription, month, dimension);
   const auto payload = load_cache_json(path_);
   if (!payload.contains(key) || !payload.at(key).is_array()) {
@@ -78,6 +79,7 @@ void LocalTrendCacheStore::put(const std::string& subscription,
                                const std::string& month,
                                const std::string& dimension,
                                const std::vector<ServiceCost>& services) const {
+  std::lock_guard lock(mutex_);
   const auto key = cache_key(subscription, month, dimension);
   auto payload = load_cache_json(path_);
 

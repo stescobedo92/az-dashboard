@@ -2,6 +2,7 @@
 
 #include "az_dashboard/analytics.hpp"
 #include "az_dashboard/cache.hpp"
+#include "az_dashboard/concurrency.hpp"
 
 #include <array>
 #include <chrono>
@@ -345,6 +346,15 @@ auto append_process_output(std::ostringstream& message, const ProcessCommand& co
   }
 }
 
+constexpr const char* kFastUsageQuery =
+    "[].{consumedService: properties.consumedService, "
+    "pretaxCost: properties.pretaxCost, "
+    "billingCurrency: properties.billingCurrency, "
+    "resourceGroup: properties.resourceGroup, "
+    "tags: properties.tags, "
+    "instanceId: properties.instanceId, "
+    "instanceName: instanceName}";
+
 class AzureCommandBuilder final {
 public:
   AzureCommandBuilder() = default;
@@ -357,9 +367,18 @@ public:
     return build({"account", "list"}, "", "");
   }
 
-  [[nodiscard]] auto consumption_usage(const std::string& sub, const std::string& tenant, std::string start_date, std::string end_date) const -> ProcessCommand {
-    return build({"consumption", "usage", "list", "--start-date", std::move(start_date), "--end-date",
-                  std::move(end_date)}, sub, tenant);
+  [[nodiscard]] auto consumption_usage(const std::string& sub,
+                                       const std::string& tenant,
+                                       std::string start_date,
+                                       std::string end_date,
+                                       const std::string& query = "") const -> ProcessCommand {
+    std::vector<std::string> args = {"consumption", "usage", "list", "--start-date", std::move(start_date), "--end-date",
+                                     std::move(end_date)};
+    if (!query.empty()) {
+      args.emplace_back("--query");
+      args.push_back(query);
+    }
+    return build(std::move(args), sub, tenant);
   }
 
   [[nodiscard]] auto advisor_cost_recommendations(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
@@ -482,14 +501,18 @@ auto AzureCliClient::current_month_costs(const CliOptions& options) const -> std
   const auto start = civil_date(0, true);
   const auto end = civil_date(0, false);
   auto subs = get_target_subscriptions(options, executor);
-  
+  const std::string query = options.fast_query ? kFastUsageQuery : "";
+
+  auto all_costs = parallel_transform(subs, [&](const std::string& sub) -> std::vector<ServiceCost> {
+    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end, query));
+    return parse_usage_costs(payload, options);
+  });
+
   std::vector<ServiceCost> combined;
-  for (const auto& sub : subs) {
-    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
-    auto costs = parse_usage_costs(payload, options);
-    combined.insert(combined.end(), costs.begin(), costs.end());
+  for (auto& costs : all_costs) {
+    combined.insert(combined.end(), std::make_move_iterator(costs.begin()), std::make_move_iterator(costs.end()));
   }
-  
+
   std::map<std::string, double> totals;
   std::map<std::string, std::string> service_currencies;
   for (const auto& item : combined) {
@@ -512,12 +535,16 @@ auto AzureCliClient::previous_month_costs(const CliOptions& options) const -> st
   const auto start = civil_date(-1, true);
   const auto end = civil_date(-1, false);
   auto subs = get_target_subscriptions(options, executor);
+  const std::string query = options.fast_query ? kFastUsageQuery : "";
+
+  auto all_costs = parallel_transform(subs, [&](const std::string& sub) -> std::vector<ServiceCost> {
+    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end, query));
+    return parse_usage_costs(payload, options);
+  });
 
   std::vector<ServiceCost> combined;
-  for (const auto& sub : subs) {
-    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
-    auto costs = parse_usage_costs(payload, options);
-    combined.insert(combined.end(), costs.begin(), costs.end());
+  for (auto& costs : all_costs) {
+    combined.insert(combined.end(), std::make_move_iterator(costs.begin()), std::make_move_iterator(costs.end()));
   }
 
   std::map<std::string, double> totals;
@@ -540,19 +567,21 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
   const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
   auto subs = get_target_subscriptions(options, executor);
-  
+
   std::string dim = (options.group_by == GroupBy::ResourceGroup) ? "rg" : "service";
   if (!options.group_by_tags.empty()) {
     dim = "tag:";
     for (const auto& t : options.group_by_tags) dim += t + ",";
   }
 
-  std::vector<MonthCost> trends;
-  for (auto offset = -5; offset <= 0; ++offset) {
+  const std::array<int, 6> offsets = {-5, -4, -3, -2, -1, 0};
+  const std::string query = options.fast_query ? kFastUsageQuery : "";
+
+  return parallel_transform(offsets, [&](int offset) -> MonthCost {
     const auto start = civil_date(offset, true);
     const auto end = offset == 0 ? civil_date(0, false) : civil_date(offset + 1, true);
     const auto m_label = month_label(offset);
-    
+
     std::vector<ServiceCost> combined;
     for (const auto& sub : subs) {
       if (offset < 0 && cache_ && !options.no_cache) {
@@ -562,14 +591,14 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
         }
       }
 
-      const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
+      const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end, query));
       auto services = parse_usage_costs(payload, options);
       if (offset < 0 && cache_ && !options.no_cache) {
         cache_->put(sub, m_label, dim, services);
       }
       combined.insert(combined.end(), services.begin(), services.end());
     }
-    
+
     std::map<std::string, double> totals;
     std::map<std::string, std::string> service_currencies;
     for (const auto& item : combined) {
@@ -586,20 +615,19 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
         month_currency = service_currencies[service];
       }
     }
-    
+
     aggregated_services = filter_selected(aggregated_services, options.selectors, [](const ServiceCost& cost) { return cost.service; });
-    trends.push_back({m_label, total_cost(aggregated_services), aggregated_services, month_currency});
-  }
-  return trends;
+    return MonthCost{m_label, total_cost(aggregated_services), aggregated_services, month_currency};
+  });
 }
 
 auto AzureCliClient::waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> {
   const AzureCommandBuilder commands;
   const AzureJsonCommandExecutor executor{*runner_};
   auto subs = get_target_subscriptions(options, executor);
-  
-  std::vector<WasteFinding> findings;
-  for (const auto& sub : subs) {
+
+  auto all_findings = parallel_transform(subs, [&](const std::string& sub) -> std::vector<WasteFinding> {
+    std::vector<WasteFinding> sub_findings;
     const std::array scans{
         WasteScan{commands.advisor_cost_recommendations(sub, options.tenant), append_advisor_findings},
         WasteScan{commands.resource_list(sub, options.tenant), append_resource_heuristics},
@@ -607,11 +635,17 @@ auto AzureCliClient::waste_findings(const CliOptions& options) const -> std::vec
     };
     for (const auto& scan : scans) {
       try {
-        scan.detect(executor.run(scan.command), findings);
+        scan.detect(executor.run(scan.command), sub_findings);
       } catch (const std::exception&) {
         // Skip failures on individual subscriptions for waste
       }
     }
+    return sub_findings;
+  });
+
+  std::vector<WasteFinding> findings;
+  for (auto& sf : all_findings) {
+    findings.insert(findings.end(), std::make_move_iterator(sf.begin()), std::make_move_iterator(sf.end()));
   }
 
   return filter_selected(findings, options.selectors, [](const WasteFinding& finding) { return finding.check; });

@@ -145,6 +145,8 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.fail_if_exceeds_cost = parse_double(args, index, token);
   } else if (token == "--no-cache") {
     options.no_cache = true;
+  } else if (token == "--fast") {
+    options.fast_query = true;
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -862,6 +864,7 @@ Global flags:
   --secrets-idle-days <days>          Compatibility threshold for secret checks.
   --fail-if-exceeds <cost>            Return exit code 2 if total cost exceeds this amount.
   --no-cache                          Bypass local cache for historical trend data.
+  --fast                              Use server-side JMESPath query projection to minimize payload size.
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault

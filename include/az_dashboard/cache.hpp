@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -49,6 +50,7 @@ public:
 
 private:
   std::filesystem::path path_;
+  mutable std::mutex mutex_;
 };
 
 /**

@@ -92,6 +92,7 @@ struct CliOptions {
   std::optional<double> fail_if_exceeds_cost;
   std::string remediation_path;
   bool no_cache{false};
+  bool fast_query{false};
 };
 
 // Azure analysis domain models.
