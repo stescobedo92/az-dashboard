@@ -50,13 +50,24 @@ public:
  * arguments. Azure CLI failures or invalid JSON are reported as exceptions with
  * sensitive selectors redacted from command summaries.
  */
+class ITrendCacheStore;
+
+/**
+ * @brief Azure data provider implemented through the Azure CLI.
+ *
+ * User-controlled subscription and tenant values are passed as typed argv
+ * arguments. Azure CLI failures or invalid JSON are reported as exceptions with
+ * sensitive selectors redacted from command summaries.
+ */
 class AzureCliClient {
 public:
   /**
-   * @brief Creates a client with a process runner.
+   * @brief Creates a client with a process runner and optional trend cache.
    * @param runner Runner used for Azure CLI commands; must not be null.
+   * @param cache Optional cache for closed historical month trend data.
    */
-  explicit AzureCliClient(std::shared_ptr<ICommandRunner> runner);
+  explicit AzureCliClient(std::shared_ptr<ICommandRunner> runner,
+                          std::shared_ptr<ITrendCacheStore> cache = nullptr);
 
   /**
    * @brief Reads the active Azure account.
@@ -95,6 +106,7 @@ public:
 
 private:
   std::shared_ptr<ICommandRunner> runner_;
+  std::shared_ptr<ITrendCacheStore> cache_;
 };
 
 } // namespace azdash

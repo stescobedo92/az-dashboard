@@ -91,6 +91,7 @@ struct CliOptions {
   int secrets_idle_days{90};
   std::optional<double> fail_if_exceeds_cost;
   std::string remediation_path;
+  bool no_cache{false};
 };
 
 // Azure analysis domain models.

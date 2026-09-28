@@ -2,6 +2,7 @@
 
 #include "az_dashboard/analytics.hpp"
 #include "az_dashboard/azure_cli.hpp"
+#include "az_dashboard/cache.hpp"
 #include "az_dashboard/history.hpp"
 #include "az_dashboard/render.hpp"
 #include "az_dashboard/report.hpp"
@@ -142,6 +143,8 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.secrets_idle_days = parse_bounded_int(args, index, token, 0, 3650);
   } else if (token == "--fail-if-exceeds") {
     options.fail_if_exceeds_cost = parse_double(args, index, token);
+  } else if (token == "--no-cache") {
+    options.no_cache = true;
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -178,7 +181,8 @@ void parse_flags_only(CliOptions& options,
 }
 
 auto make_client() -> AzureCliClient {
-  return AzureCliClient(std::make_shared<ShellCommandRunner>());
+  return AzureCliClient(std::make_shared<ShellCommandRunner>(),
+                        std::make_shared<LocalTrendCacheStore>(default_trend_cache_path()));
 }
 
 class ArgumentParser {
@@ -857,6 +861,7 @@ Global flags:
   --function-memory-threshold <pct>   Compatibility threshold for function checks.
   --secrets-idle-days <days>          Compatibility threshold for secret checks.
   --fail-if-exceeds <cost>            Return exit code 2 if total cost exceeds this amount.
+  --no-cache                          Bypass local cache for historical trend data.
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault

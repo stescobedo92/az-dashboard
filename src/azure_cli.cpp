@@ -1,6 +1,7 @@
 #include "az_dashboard/azure_cli.hpp"
 
 #include "az_dashboard/analytics.hpp"
+#include "az_dashboard/cache.hpp"
 
 #include <array>
 #include <chrono>
@@ -434,7 +435,9 @@ auto civil_date_for_month(std::chrono::year_month_day anchor, int month_offset, 
 
 } // namespace detail
 
-AzureCliClient::AzureCliClient(std::shared_ptr<ICommandRunner> runner) : runner_(std::move(runner)) {
+AzureCliClient::AzureCliClient(std::shared_ptr<ICommandRunner> runner,
+                               std::shared_ptr<ITrendCacheStore> cache)
+    : runner_(std::move(runner)), cache_(std::move(cache)) {
   if (!runner_) {
     throw std::invalid_argument("runner is required");
   }
@@ -538,15 +541,32 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
   const AzureJsonCommandExecutor executor{*runner_};
   auto subs = get_target_subscriptions(options, executor);
   
+  std::string dim = (options.group_by == GroupBy::ResourceGroup) ? "rg" : "service";
+  if (!options.group_by_tags.empty()) {
+    dim = "tag:";
+    for (const auto& t : options.group_by_tags) dim += t + ",";
+  }
+
   std::vector<MonthCost> trends;
   for (auto offset = -5; offset <= 0; ++offset) {
     const auto start = civil_date(offset, true);
     const auto end = offset == 0 ? civil_date(0, false) : civil_date(offset + 1, true);
+    const auto m_label = month_label(offset);
     
     std::vector<ServiceCost> combined;
     for (const auto& sub : subs) {
+      if (offset < 0 && cache_ && !options.no_cache) {
+        if (auto hit = cache_->get(sub, m_label, dim)) {
+          combined.insert(combined.end(), hit->begin(), hit->end());
+          continue;
+        }
+      }
+
       const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end));
       auto services = parse_usage_costs(payload, options);
+      if (offset < 0 && cache_ && !options.no_cache) {
+        cache_->put(sub, m_label, dim, services);
+      }
       combined.insert(combined.end(), services.begin(), services.end());
     }
     
@@ -568,7 +588,7 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
     }
     
     aggregated_services = filter_selected(aggregated_services, options.selectors, [](const ServiceCost& cost) { return cost.service; });
-    trends.push_back({month_label(offset), total_cost(aggregated_services), aggregated_services, month_currency});
+    trends.push_back({m_label, total_cost(aggregated_services), aggregated_services, month_currency});
   }
   return trends;
 }
