@@ -137,12 +137,20 @@ private:
 
 class PdfPage {
 public:
-  void line(const std::string& line) {
+  [[nodiscard]] auto can_fit_line() const -> bool {
+    return y_ >= 48;
+  }
+
+  void add_line(const std::string& line) {
     if (y_ < 48) {
       return;
     }
     content_ << "BT /F1 10 Tf 48 " << y_ << " Td (" << escaper_.escape(line) << ") Tj ET\n";
     y_ -= 14;
+  }
+
+  void add_footer(const std::string& footer_text) {
+    content_ << "BT /F1 8 Tf 48 30 Td (" << escaper_.escape(footer_text) << ") Tj ET\n";
   }
 
   [[nodiscard]] auto content() const -> std::string {
@@ -155,9 +163,44 @@ private:
   PdfTextEscaper escaper_;
 };
 
+class PdfDocument {
+public:
+  void line(const std::string& line) {
+    if (pages_.empty() || !pages_.back().can_fit_line()) {
+      pages_.emplace_back();
+    }
+    pages_.back().add_line(line);
+  }
+
+  [[nodiscard]] auto pages() -> std::vector<PdfPage>& {
+    return pages_;
+  }
+
+  [[nodiscard]] auto pages() const -> const std::vector<PdfPage>& {
+    return pages_;
+  }
+
+  void finalize_page_numbers() {
+    if (pages_.empty()) {
+      pages_.emplace_back();
+    }
+    const auto total = pages_.size();
+    for (std::size_t i = 0; i < total; ++i) {
+      pages_[i].add_footer("Page " + std::to_string(i + 1) + " of " + std::to_string(total));
+    }
+  }
+
+private:
+  std::vector<PdfPage> pages_;
+};
+
 class PdfFileWriter {
 public:
-  void save(const std::filesystem::path& path, const PdfPage& page) const {
+  void save(const std::filesystem::path& path, PdfDocument& doc) const {
+    doc.finalize_page_numbers();
+    const auto& pages = doc.pages();
+    const auto page_count = pages.empty() ? std::size_t{1} : pages.size();
+
     std::filesystem::create_directories(path.parent_path().empty() ? "." : path.parent_path());
 
     std::ostringstream pdf;
@@ -169,20 +212,35 @@ public:
 
     pdf << "%PDF-1.4\n";
     object(1, "<< /Type /Catalog /Pages 2 0 R >>");
-    object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-    object(3,
-           "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> "
-           "/Contents 5 0 R >>");
-    object(4, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-    const auto stream = page.content();
-    object(5, "<< /Length " + std::to_string(stream.size()) + " >>\nstream\n" + stream + "endstream");
 
+    std::string kids = "[";
+    for (std::size_t i = 0; i < page_count; ++i) {
+      const auto page_obj_id = 4 + 2 * i;
+      kids += std::to_string(page_obj_id) + " 0 R ";
+    }
+    kids += "]";
+
+    object(2, "<< /Type /Pages /Kids " + kids + " /Count " + std::to_string(page_count) + " >>");
+    object(3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+
+    for (std::size_t i = 0; i < page_count; ++i) {
+      const auto page_obj_id = 4 + 2 * i;
+      const auto contents_obj_id = 5 + 2 * i;
+      object(static_cast<int>(page_obj_id),
+             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> "
+             "/Contents " + std::to_string(contents_obj_id) + " 0 R >>");
+      const auto stream = (i < pages.size()) ? pages[i].content() : "";
+      object(static_cast<int>(contents_obj_id),
+             "<< /Length " + std::to_string(stream.size()) + " >>\nstream\n" + stream + "endstream");
+    }
+
+    const auto total_objs = static_cast<int>(3 + 2 * page_count);
     const auto xref = static_cast<std::streamoff>(pdf.tellp());
-    pdf << "xref\n0 6\n0000000000 65535 f \n";
+    pdf << "xref\n0 " << (total_objs + 1) << "\n0000000000 65535 f \n";
     for (const auto offset : offsets) {
       pdf << std::setw(10) << std::setfill('0') << offset << " 00000 n \n";
     }
-    pdf << "trailer << /Size 6 /Root 1 0 R >>\nstartxref\n" << xref << "\n%%EOF\n";
+    pdf << "trailer << /Size " << (total_objs + 1) << " /Root 1 0 R >>\nstartxref\n" << xref << "\n%%EOF\n";
 
     write_file_without_following_symlink(path, pdf.str());
   }
@@ -270,7 +328,7 @@ class PdfReportSection {
 public:
   virtual ~PdfReportSection() = default;
   [[nodiscard]] virtual auto title() const -> std::string = 0;
-  virtual void write(PdfPage& page) const = 0;
+  virtual void write(PdfDocument& doc) const = 0;
 };
 
 class CostReportSection final : public PdfReportSection {
@@ -281,12 +339,12 @@ public:
     return "Cost comparison";
   }
 
-  void write(PdfPage& page) const override {
-    page.line("Service | Previous | Current | Delta | Delta %");
+  void write(PdfDocument& doc) const override {
+    doc.line("Service | Previous | Current | Delta | Delta %");
     for (const auto& row : rows_) {
-      page.line(row.service + " | " + NumberFormatter::money(row.previous) + " | " +
-                NumberFormatter::money(row.current) + " | " + NumberFormatter::money(row.delta) + " | " +
-                NumberFormatter::money(row.delta_percent) + "%");
+      doc.line(row.service + " | " + NumberFormatter::money(row.previous) + " | " +
+               NumberFormatter::money(row.current) + " | " + NumberFormatter::money(row.delta) + " | " +
+               NumberFormatter::money(row.delta_percent) + "%");
     }
   }
 
@@ -302,10 +360,10 @@ public:
     return "Six-month trend";
   }
 
-  void write(PdfPage& page) const override {
-    page.line("Month | Total");
+  void write(PdfDocument& doc) const override {
+    doc.line("Month | Total");
     for (const auto& row : rows_) {
-      page.line(row.month + " | " + NumberFormatter::money(row.total));
+      doc.line(row.month + " | " + NumberFormatter::money(row.total));
     }
   }
 
@@ -321,11 +379,11 @@ public:
     return "Waste findings";
   }
 
-  void write(PdfPage& page) const override {
-    page.line("Check | Type | Name | Savings | Recommendation");
+  void write(PdfDocument& doc) const override {
+    doc.line("Check | Type | Name | Savings | Recommendation");
     for (const auto& row : rows_) {
-      page.line(row.check + " | " + row.resource_type + " | " + row.name + " | " +
-                NumberFormatter::money(row.estimated_monthly_savings) + " | " + row.recommendation);
+      doc.line(row.check + " | " + row.resource_type + " | " + row.name + " | " +
+               NumberFormatter::money(row.estimated_monthly_savings) + " | " + row.recommendation);
     }
   }
 
@@ -333,18 +391,18 @@ private:
   const std::vector<WasteFinding>& rows_;
 };
 
-void write_report_header(PdfPage& page, const AccountInfo& account, const std::string& title) {
-  page.line("azdash - " + title);
-  page.line("Subscription: " + account.subscription_name + " (" + account.subscription_id + ")");
-  page.line("Tenant: " + account.tenant_id);
-  page.line("");
+void write_report_header(PdfDocument& doc, const AccountInfo& account, const std::string& title) {
+  doc.line("azdash - " + title);
+  doc.line("Subscription: " + account.subscription_name + " (" + account.subscription_id + ")");
+  doc.line("Tenant: " + account.tenant_id);
+  doc.line("");
 }
 
 void write_pdf_report(const std::filesystem::path& path, const AccountInfo& account, const PdfReportSection& section) {
-  PdfPage page;
-  write_report_header(page, account, section.title());
-  section.write(page);
-  PdfFileWriter{}.save(path, page);
+  PdfDocument doc;
+  write_report_header(doc, account, section.title());
+  section.write(doc);
+  PdfFileWriter{}.save(path, doc);
 }
 
 } // namespace

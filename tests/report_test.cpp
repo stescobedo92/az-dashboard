@@ -106,4 +106,45 @@ TEST(ReportTest, WritePdfRejectsSymlinkDestination) {
   std::filesystem::remove(target);
 }
 
+TEST(ReportTest, MultiPagePdfGeneratesMultiplePagesWithoutDroppingRows) {
+  const auto path = std::filesystem::temp_directory_path() / "azdash-test-multipage-report.pdf";
+  const azdash::AccountInfo account{.subscription_id = "sub-123", .subscription_name = "Enterprise Prod", .tenant_id = "tenant-456"};
+
+  std::vector<azdash::CostComparisonRow> rows;
+  rows.reserve(120);
+  for (int i = 0; i < 120; ++i) {
+    rows.push_back({
+        .service = "Enterprise-Service-" + std::to_string(i),
+        .previous = static_cast<double>(i * 10),
+        .current = static_cast<double>(i * 12),
+        .delta = static_cast<double>(i * 2),
+        .delta_percent = 20.0,
+    });
+  }
+
+  azdash::write_cost_pdf(path, account, rows);
+
+  {
+    std::ifstream file(path, std::ios::binary);
+    ASSERT_TRUE(file.is_open());
+    const std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    // Verify it is a valid PDF header
+    EXPECT_EQ(content.substr(0, 8), "%PDF-1.4");
+
+    // Verify multiple pages are created (120 rows plus headers = 3 pages)
+    EXPECT_NE(content.find("/Count 3"), std::string::npos);
+    EXPECT_NE(content.find("Page 1 of 3"), std::string::npos);
+    EXPECT_NE(content.find("Page 2 of 3"), std::string::npos);
+    EXPECT_NE(content.find("Page 3 of 3"), std::string::npos);
+
+    // Verify that first, middle, and LAST row are all preserved and not dropped!
+    EXPECT_NE(content.find("Enterprise-Service-0"), std::string::npos);
+    EXPECT_NE(content.find("Enterprise-Service-60"), std::string::npos);
+    EXPECT_NE(content.find("Enterprise-Service-119"), std::string::npos);
+  }
+
+  std::filesystem::remove(path);
+}
+
 } // namespace
