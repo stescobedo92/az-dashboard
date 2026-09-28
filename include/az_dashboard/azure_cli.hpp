@@ -3,9 +3,22 @@
 #include "az_dashboard/models.hpp"
 
 #include <memory>
+#include <nlohmann/json.hpp>
+#include <string_view>
 #include <vector>
 
 namespace azdash {
+
+namespace detail {
+auto parse_usage_costs(const nlohmann::json& payload, const CliOptions& options) -> std::vector<ServiceCost>;
+auto parse_budget_items(const nlohmann::json& payload, const CliOptions& options) -> std::vector<BudgetInfo>;
+void append_advisor_findings(const nlohmann::json& payload, std::vector<WasteFinding>& findings);
+void append_resource_heuristics(const nlohmann::json& payload, std::vector<WasteFinding>& findings);
+void append_vm_heuristics(const nlohmann::json& payload, std::vector<WasteFinding>& findings);
+auto normalize_term(std::string_view raw) -> std::string;
+auto civil_date(int month_offset, bool month_start) -> std::string;
+auto month_label(int month_offset) -> std::string;
+} // namespace detail
 
 /**
  * @brief Abstract process runner used to isolate process execution from Azure parsing logic.

@@ -18,11 +18,6 @@
 #include <vector>
 
 namespace azdash {
-namespace detail {
-
-auto civil_date_for_month(std::chrono::year_month_day anchor, int month_offset, bool month_start) -> std::string;
-
-} // namespace detail
 
 namespace {
 
@@ -51,6 +46,21 @@ auto target_month(std::chrono::year_month_day anchor, int month_offset) -> std::
   return std::chrono::year_month{anchor.year(), anchor.month()} + std::chrono::months{month_offset};
 }
 
+} // namespace
+
+namespace detail {
+
+auto civil_date_for_month(std::chrono::year_month_day anchor, int month_offset, bool month_start) -> std::string {
+  const auto month = target_month(anchor, month_offset);
+  if (month_start) {
+    return format_date(month / std::chrono::day{1});
+  }
+
+  const auto last_day = std::chrono::year_month_day{month / std::chrono::last}.day();
+  const auto day = anchor.day() > last_day ? last_day : anchor.day();
+  return format_date(month / day);
+}
+
 auto month_label(int month_offset) -> std::string {
   const auto month = target_month(current_local_date(), month_offset);
   std::ostringstream out;
@@ -62,6 +72,12 @@ auto month_label(int month_offset) -> std::string {
 auto civil_date(int month_offset, bool month_start) -> std::string {
   return detail::civil_date_for_month(current_local_date(), month_offset, month_start);
 }
+
+} // namespace detail
+
+using namespace detail;
+
+namespace {
 
 auto json_string(const nlohmann::json& object, std::initializer_list<const char*> keys) -> std::string {
   for (const auto* key : keys) {
@@ -225,6 +241,10 @@ struct CompiledTagFilter {
   }
   return true;
 }
+
+} // namespace
+
+namespace detail {
 
 auto parse_usage_costs(const nlohmann::json& payload, const CliOptions& options) -> std::vector<ServiceCost> {
   std::vector<ServiceCost> raw;
@@ -400,6 +420,10 @@ auto append_vm_heuristics(const nlohmann::json& payload, std::vector<WasteFindin
   }
 }
 
+} // namespace detail
+
+namespace {
+
 using WasteDetector = void (*)(const nlohmann::json&, std::vector<WasteFinding>&);
 
 struct WasteScan final {
@@ -560,27 +584,16 @@ private:
   const ICommandRunner& runner_;
 };
 
+} // namespace
+
+namespace detail {
+
 auto normalize_term(std::string_view raw) -> std::string {
   if (raw.find('3') != std::string_view::npos || raw.find("P3Y") != std::string_view::npos ||
       raw.find("3y") != std::string_view::npos || raw.find("3Y") != std::string_view::npos) {
     return "3 Years";
   }
   return "1 Year";
-}
-
-} // namespace
-
-namespace detail {
-
-auto civil_date_for_month(std::chrono::year_month_day anchor, int month_offset, bool month_start) -> std::string {
-  const auto month = target_month(anchor, month_offset);
-  if (month_start) {
-    return format_date(month / std::chrono::day{1});
-  }
-
-  const auto last_day = std::chrono::year_month_day{month / std::chrono::last}.day();
-  const auto day = anchor.day() > last_day ? last_day : anchor.day();
-  return format_date(month / day);
 }
 
 } // namespace detail
@@ -639,6 +652,10 @@ void extract_mg_subscriptions(const nlohmann::json& node, std::vector<std::strin
   }
 }
 
+} // namespace
+
+namespace detail {
+
 auto parse_budget_items(const nlohmann::json& payload, const CliOptions& options) -> std::vector<BudgetInfo> {
   std::vector<BudgetInfo> budgets;
   if (!payload.is_array()) {
@@ -695,6 +712,10 @@ auto parse_budget_items(const nlohmann::json& payload, const CliOptions& options
   }
   return budgets;
 }
+
+} // namespace detail
+
+namespace {
 
 auto get_target_subscriptions(const CliOptions& options, const AzureJsonCommandExecutor& executor) -> std::vector<std::string> {
   if (!options.management_group.empty()) {
@@ -927,7 +948,7 @@ auto AzureCliClient::commitment_recommendations(const CliOptions& options) const
           const auto& props = (item.contains("properties") && item.at("properties").is_object()) ? item.at("properties") : item;
           auto sku = json_string(props, {"skuName", "sku"});
           auto term_raw = json_string(props, {"term"});
-          auto term = normalize_term(term_raw);
+          auto term = detail::normalize_term(term_raw);
           auto currency = json_string(props, {"currency"});
           if (currency.empty()) {
             currency = "USD";
@@ -973,7 +994,7 @@ auto AzureCliClient::commitment_recommendations(const CliOptions& options) const
           bool is_sp = rec_id.find("SavingsPlan") != std::string::npos || short_desc.find("Savings Plan") != std::string::npos || short_desc.find("savings plan") != std::string::npos;
 
           if (is_ri || is_sp) {
-            auto term = normalize_term(short_desc);
+            auto term = detail::normalize_term(short_desc);
             auto currency = json_string(props, {"currency", "savingsCurrency"});
             if (currency.empty()) {
               currency = "USD";
@@ -1019,7 +1040,7 @@ auto AzureCliClient::commitment_recommendations(const CliOptions& options) const
       continue;
     }
     if (!options.commitment_term.empty()) {
-      auto req_term = normalize_term(options.commitment_term);
+      auto req_term = detail::normalize_term(options.commitment_term);
       if (r.term != req_term) {
         continue;
       }

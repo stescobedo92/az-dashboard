@@ -2,6 +2,7 @@
 
 #include "az_dashboard/analytics.hpp"
 #include "az_dashboard/azure_cli.hpp"
+#include "az_dashboard/azure_rest.hpp"
 #include "az_dashboard/cache.hpp"
 #include "az_dashboard/history.hpp"
 #include "az_dashboard/render.hpp"
@@ -170,6 +171,8 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.commitment_term = require_value(args, index, token);
   } else if (token == "--min-savings") {
     options.min_savings = parse_double(args, index, token);
+  } else if (token == "--rest" || token == "--use-rest") {
+    options.use_rest = true;
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -205,9 +208,14 @@ void parse_flags_only(CliOptions& options,
   }
 }
 
-auto make_client() -> AzureCliClient {
-  return AzureCliClient(std::make_shared<ShellCommandRunner>(),
-                        std::make_shared<LocalTrendCacheStore>(default_trend_cache_path()));
+auto make_client(const CliOptions& options = {}) -> std::shared_ptr<IAzureClient> {
+  const auto creds = AzureRestCredentials::from_env();
+  if (options.use_rest || creds.is_valid()) {
+    return std::make_shared<AzureRestClient>(creds, std::make_shared<CurlHttpRequester>(),
+                                             std::make_shared<LocalTrendCacheStore>(default_trend_cache_path()));
+  }
+  return std::make_shared<AzureCliClient>(std::make_shared<ShellCommandRunner>(),
+                                          std::make_shared<LocalTrendCacheStore>(default_trend_cache_path()));
 }
 
 class ArgumentParser {
@@ -357,7 +365,9 @@ private:
 class AzureCliRuntimeProvider final : public AzureClientAdapter {
 public:
   AzureCliRuntimeProvider()
-      : AzureClientAdapter(std::make_shared<AzureCliClient>(make_client())) {}
+      : AzureClientAdapter(make_client()) {}
+  explicit AzureCliRuntimeProvider(const CliOptions& options)
+      : AzureClientAdapter(make_client(options)) {}
   explicit AzureCliRuntimeProvider(std::shared_ptr<IAzureClient> client)
       : AzureClientAdapter(std::move(client)) {}
 };
@@ -1036,7 +1046,7 @@ auto parse_args(std::span<const std::string> args) -> CliOptions {
 }
 
 auto run(const CliOptions& options) -> int {
-  auto provider = AzureCliRuntimeProvider();
+  auto provider = AzureCliRuntimeProvider(options);
   auto report_writer = PdfReportWriter();
   auto alias_store = LocalSubscriptionAliasStore();
   auto history_store = LocalCostHistoryStore();
@@ -1084,6 +1094,7 @@ Global flags:
   --budget <name>                     Filter Azure budget by name.
   --term <1yr|3yr>                    Commitment term filter (1 Year or 3 Years).
   --min-savings <amount>              Minimum monthly savings filter for commitments.
+  --rest, --use-rest                  Direct Azure REST API mode (uses OAuth2 client credentials).
   --tenant <id>                       Reserved for tenant-aware providers.
   -o, --output <table|json|csv|markdown>  Output format. Defaults to table.
   --path <file-or-directory>          Report output path.

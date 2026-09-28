@@ -108,6 +108,7 @@ struct CliOptions {
   std::string budget_filter;
   std::string commitment_term;
   double min_savings{0.0};
+  bool use_rest{false};
 };
 
 // Azure analysis domain models.

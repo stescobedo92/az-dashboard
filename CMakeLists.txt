@@ -43,6 +43,7 @@ endfunction()
 add_library(az_dashboard_lib STATIC
   src/analytics.cpp
   src/azure_cli.cpp
+  src/azure_rest.cpp
   src/cache.cpp
   src/cli.cpp
   src/history.cpp
@@ -125,6 +126,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
   add_executable(az-dashboard-tests
     tests/analytics_test.cpp
     tests/azure_cli_test.cpp
+    tests/azure_rest_test.cpp
     tests/budget_test.cpp
     tests/cache_test.cpp
     tests/cli_test.cpp
