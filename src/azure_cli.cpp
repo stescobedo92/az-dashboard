@@ -188,16 +188,29 @@ auto parse_usage_costs(const nlohmann::json& payload, const CliOptions& options)
     }
 
     const auto cost = json_number(properties, {"pretaxCost", "costInBillingCurrency", "cost", "extendedCost"});
-    raw.push_back({service, cost, tags});
+    auto currency = json_string(properties, {"billingCurrency", "billingCurrencyCode", "currency"});
+    if (currency.empty()) {
+      currency = json_string(item, {"billingCurrency", "billingCurrencyCode", "currency"});
+    }
+    if (currency.empty()) {
+      currency = "USD";
+    }
+    raw.push_back({service, cost, tags, currency});
   }
 
-  const auto totals = aggregate_by(raw, [](const ServiceCost& cost) { return cost.service; },
-                                  [](const ServiceCost& cost) { return cost.cost; });
+  std::map<std::string, double> totals;
+  std::map<std::string, std::string> service_currencies;
+  for (const auto& item : raw) {
+    totals[item.service] += item.cost;
+    if (item.currency != "USD" || !service_currencies.contains(item.service)) {
+      service_currencies[item.service] = item.currency;
+    }
+  }
 
   std::vector<ServiceCost> costs;
   costs.reserve(totals.size());
   for (const auto& [service, cost] : totals) {
-    costs.push_back({service, cost});
+    costs.push_back({service, cost, {}, service_currencies[service]});
   }
   return costs;
 }
@@ -209,6 +222,10 @@ auto append_advisor_findings(const nlohmann::json& payload, std::vector<WasteFin
 
   for (const auto& item : payload) {
     const auto properties = item.contains("properties") ? item.at("properties") : item;
+    auto currency = json_string(properties, {"currency", "savingsCurrency"});
+    if (currency.empty()) {
+      currency = "USD";
+    }
     findings.push_back({
         "advisor",
         json_string(properties, {"resourceMetadata", "resourceId"}),
@@ -217,6 +234,7 @@ auto append_advisor_findings(const nlohmann::json& payload, std::vector<WasteFin
         "",
         json_string(properties, {"shortDescription", "recommendationTypeId", "description"}),
         json_number(properties, {"annualSavingsAmount", "savingsAmount"}) / 12.0,
+        currency,
     });
   }
 }
@@ -469,11 +487,18 @@ auto AzureCliClient::current_month_costs(const CliOptions& options) const -> std
     combined.insert(combined.end(), costs.begin(), costs.end());
   }
   
-  const auto totals = aggregate_by(combined, [](const ServiceCost& cost) { return cost.service; },
-                                   [](const ServiceCost& cost) { return cost.cost; });
+  std::map<std::string, double> totals;
+  std::map<std::string, std::string> service_currencies;
+  for (const auto& item : combined) {
+    totals[item.service] += item.cost;
+    if (item.currency != "USD" || !service_currencies.contains(item.service)) {
+      service_currencies[item.service] = item.currency;
+    }
+  }
   std::vector<ServiceCost> results;
+  results.reserve(totals.size());
   for (const auto& [service, cost] : totals) {
-    results.push_back({service, cost});
+    results.push_back({service, cost, {}, service_currencies[service]});
   }
   return results;
 }
@@ -492,11 +517,18 @@ auto AzureCliClient::previous_month_costs(const CliOptions& options) const -> st
     combined.insert(combined.end(), costs.begin(), costs.end());
   }
 
-  const auto totals = aggregate_by(combined, [](const ServiceCost& cost) { return cost.service; },
-                                   [](const ServiceCost& cost) { return cost.cost; });
+  std::map<std::string, double> totals;
+  std::map<std::string, std::string> service_currencies;
+  for (const auto& item : combined) {
+    totals[item.service] += item.cost;
+    if (item.currency != "USD" || !service_currencies.contains(item.service)) {
+      service_currencies[item.service] = item.currency;
+    }
+  }
   std::vector<ServiceCost> results;
+  results.reserve(totals.size());
   for (const auto& [service, cost] : totals) {
-    results.push_back({service, cost});
+    results.push_back({service, cost, {}, service_currencies[service]});
   }
   return results;
 }
@@ -518,15 +550,25 @@ auto AzureCliClient::six_month_trends(const CliOptions& options) const -> std::v
       combined.insert(combined.end(), services.begin(), services.end());
     }
     
-    const auto totals = aggregate_by(combined, [](const ServiceCost& cost) { return cost.service; },
-                                     [](const ServiceCost& cost) { return cost.cost; });
+    std::map<std::string, double> totals;
+    std::map<std::string, std::string> service_currencies;
+    for (const auto& item : combined) {
+      totals[item.service] += item.cost;
+      if (item.currency != "USD" || !service_currencies.contains(item.service)) {
+        service_currencies[item.service] = item.currency;
+      }
+    }
     std::vector<ServiceCost> aggregated_services;
+    std::string month_currency = "USD";
     for (const auto& [service, cost] : totals) {
-      aggregated_services.push_back({service, cost});
+      aggregated_services.push_back({service, cost, {}, service_currencies[service]});
+      if (service_currencies[service] != "USD") {
+        month_currency = service_currencies[service];
+      }
     }
     
     aggregated_services = filter_selected(aggregated_services, options.selectors, [](const ServiceCost& cost) { return cost.service; });
-    trends.push_back({month_label(offset), total_cost(aggregated_services), aggregated_services});
+    trends.push_back({month_label(offset), total_cost(aggregated_services), aggregated_services, month_currency});
   }
   return trends;
 }

@@ -164,6 +164,19 @@ TEST(AzureCliTest, CurrentMonthCostsAggregatesDuplicateServices) {
   EXPECT_DOUBLE_EQ(storage->cost, 1.0);
 }
 
+TEST(AzureCliTest, CurrentMonthCostsExtractsBillingCurrency) {
+  auto runner = std::make_shared<FakeRunner>(std::vector<azdash::CommandResult>{
+      {0, R"([{"properties":{"consumedService":"Virtual Machines","pretaxCost":2.5,"billingCurrency":"EUR"}},{"properties":{"meterCategory":"Storage","pretaxCost":1.0,"billingCurrency":"EUR"}}])", ""},
+  });
+
+  const auto costs = make_client(runner).current_month_costs({});
+
+  ASSERT_EQ(costs.size(), 2);
+  for (const auto& cost : costs) {
+    EXPECT_EQ(cost.currency, "EUR");
+  }
+}
+
 TEST(AzureCliTest, CurrentMonthCostsGroupByResourceGroupUsesIdAndDirectField) {
   auto runner = std::make_shared<FakeRunner>(std::vector<azdash::CommandResult>{
       {0,

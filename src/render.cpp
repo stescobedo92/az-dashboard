@@ -262,8 +262,12 @@ public:
   
   [[nodiscard]] auto footer() const -> ftxui::Element {
     if (projected_total_ > 0.0) {
+      std::string label = " Projected EOM Total: ";
+      if (!rows_.empty() && rows_.front().currency != "USD" && !rows_.front().currency.empty()) {
+        label = " Projected EOM Total (" + rows_.front().currency + "): ";
+      }
       return ftxui::hbox({
-          ftxui::text(" Projected EOM Total: ") | ftxui::bold | ftxui::color(ftxui::Color::Yellow),
+          ftxui::text(label) | ftxui::bold | ftxui::color(ftxui::Color::Yellow),
           ftxui::text(NumberFormatter::money(projected_total_)) | ftxui::bold | ftxui::color(ftxui::Color::White)
       });
     }
@@ -279,6 +283,7 @@ public:
           {"current", row.current},
           {"delta", row.delta},
           {"deltaPercent", row.delta_percent},
+          {"currency", row.currency},
       });
     }
     return payload;
@@ -342,9 +347,9 @@ public:
     for (const auto& row : rows_) {
       nlohmann::json services = nlohmann::json::array();
       for (const auto& service : row.services) {
-        services.push_back({{"service", service.service}, {"cost", service.cost}});
+        services.push_back({{"service", service.service}, {"cost", service.cost}, {"currency", service.currency}});
       }
-      payload.push_back({{"month", row.month}, {"total", row.total}, {"services", services}});
+      payload.push_back({{"month", row.month}, {"total", row.total}, {"currency", row.currency}, {"services", services}});
     }
     return payload;
   }
@@ -403,6 +408,7 @@ public:
           {"location", row.location},
           {"recommendation", row.recommendation},
           {"estimatedMonthlySavings", row.estimated_monthly_savings},
+          {"currency", row.currency},
       });
     }
     return payload;
@@ -465,11 +471,12 @@ public:
     for (const auto& row : rows_) {
       nlohmann::json services = nlohmann::json::array();
       for (const auto& service : row.services) {
-        services.push_back({{"service", service.service}, {"cost", service.cost}});
+        services.push_back({{"service", service.service}, {"cost", service.cost}, {"currency", service.currency}});
       }
       payload.push_back({{"timestamp", row.timestamp},
                          {"subscription", row.subscription},
                          {"total", row.total},
+                         {"currency", row.currency},
                          {"services", services}});
     }
     return payload;

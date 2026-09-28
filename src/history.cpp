@@ -43,11 +43,12 @@ namespace {
 [[nodiscard]] auto snapshot_to_json(const CostSnapshot& snapshot) -> nlohmann::json {
   nlohmann::json services = nlohmann::json::array();
   for (const auto& service : snapshot.services) {
-    services.push_back({{"service", service.service}, {"cost", service.cost}});
+    services.push_back({{"service", service.service}, {"cost", service.cost}, {"currency", service.currency}});
   }
   return {{"timestamp", snapshot.timestamp},
           {"subscription", snapshot.subscription},
           {"total", snapshot.total},
+          {"currency", snapshot.currency},
           {"services", std::move(services)}};
 }
 
@@ -62,6 +63,9 @@ namespace {
   if (item.contains("total") && item.at("total").is_number()) {
     snapshot.total = item.at("total").get<double>();
   }
+  if (item.contains("currency") && item.at("currency").is_string()) {
+    snapshot.currency = item.at("currency").get<std::string>();
+  }
   if (item.contains("services") && item.at("services").is_array()) {
     for (const auto& service : item.at("services")) {
       if (!service.is_object() || !service.contains("service") || !service.at("service").is_string()) {
@@ -71,6 +75,9 @@ namespace {
       cost.service = service.at("service").get<std::string>();
       if (service.contains("cost") && service.at("cost").is_number()) {
         cost.cost = service.at("cost").get<double>();
+      }
+      if (service.contains("currency") && service.at("currency").is_string()) {
+        cost.currency = service.at("currency").get<std::string>();
       }
       snapshot.services.push_back(std::move(cost));
     }

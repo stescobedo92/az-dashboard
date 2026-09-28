@@ -109,4 +109,16 @@ TEST(AnalyticsTest, FilterSelectedIsCaseInsensitive) {
   EXPECT_EQ(filtered[0].name, "vm-a");
 }
 
+TEST(AnalyticsTest, CompareCostsPropagatesCurrencyFromInputs) {
+  const std::vector<azdash::ServiceCost> current{
+      {.service = "Virtual Machines", .cost = 150.0, .tags = {}, .currency = "EUR"}};
+  const std::vector<azdash::ServiceCost> previous{
+      {.service = "Virtual Machines", .cost = 100.0, .tags = {}, .currency = "EUR"}};
+
+  const auto rows = azdash::compare_costs(current, previous);
+
+  ASSERT_EQ(rows.size(), 1);
+  EXPECT_EQ(rows[0].currency, "EUR");
+}
+
 } // namespace

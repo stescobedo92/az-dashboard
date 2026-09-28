@@ -456,8 +456,9 @@ void record_cost_snapshot(const CliOptions& resolved_options,
                           const std::vector<ServiceCost>& current,
                           const CliRuntime& runtime) {
   try {
+    std::string currency = current.empty() ? "USD" : current.front().currency;
     runtime.history_store.record({current_utc_timestamp(), subscription_label(resolved_options.subscriptions),
-                                  total_cost(current), current});
+                                  total_cost(current), current, currency});
   } catch (const std::exception& error) {
     runtime.err << "warning: could not record cost history: " << error.what() << '\n';
   }

@@ -112,6 +112,7 @@ struct ServiceCost {
   std::string service;
   double cost{0.0};
   std::map<std::string, std::string> tags;
+  std::string currency{"USD"};
 };
 
 /**
@@ -121,6 +122,7 @@ struct MonthCost {
   std::string month;
   double total{0.0};
   std::vector<ServiceCost> services;
+  std::string currency{"USD"};
 };
 
 /**
@@ -132,6 +134,7 @@ struct CostComparisonRow {
   double current{0.0};
   double delta{0.0};
   double delta_percent{0.0};
+  std::string currency{"USD"};
 };
 
 /**
@@ -145,6 +148,7 @@ struct WasteFinding {
   std::string location;
   std::string recommendation;
   double estimated_monthly_savings{0.0};
+  std::string currency{"USD"};
 };
 
 /**
@@ -167,6 +171,7 @@ struct CostSnapshot {
   std::string subscription;
   double total{0.0};
   std::vector<ServiceCost> services;
+  std::string currency{"USD"};
 };
 
 /**

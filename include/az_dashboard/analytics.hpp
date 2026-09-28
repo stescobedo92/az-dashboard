@@ -124,6 +124,26 @@ auto compare_costs_by(const CurrentRange& current,
   std::vector<CostComparisonRow> rows;
   rows.reserve(services.size());
 
+  std::string currency = "USD";
+  for (const auto& item : current) {
+    if constexpr (requires { item.currency; }) {
+      if (!item.currency.empty()) {
+        currency = item.currency;
+        break;
+      }
+    }
+  }
+  if (currency == "USD") {
+    for (const auto& item : previous) {
+      if constexpr (requires { item.currency; }) {
+        if (!item.currency.empty()) {
+          currency = item.currency;
+          break;
+        }
+      }
+    }
+  }
+
   for (const auto& service : services) {
     const auto previous_it = previous_by_service.find(service);
     const auto current_it = current_by_service.find(service);
@@ -132,7 +152,7 @@ auto compare_costs_by(const CurrentRange& current,
     const auto delta = current_cost - previous_cost;
     const auto percent = previous_cost == 0.0 ? (current_cost == 0.0 ? 0.0 : 100.0)
                                               : (delta / previous_cost) * 100.0;
-    rows.push_back({service, previous_cost, current_cost, delta, percent});
+    rows.push_back({service, previous_cost, current_cost, delta, percent, currency});
   }
 
   std::ranges::sort(rows, [](const auto& lhs, const auto& rhs) {

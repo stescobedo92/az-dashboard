@@ -41,20 +41,34 @@ TEST(RenderTest, TrendJsonPreservesServiceDetails) {
   EXPECT_EQ(out.str(),
             "[\n"
             "  {\n"
+            "    \"currency\": \"USD\",\n"
             "    \"month\": \"2026-05\",\n"
             "    \"services\": [\n"
             "      {\n"
             "        \"cost\": 7.5,\n"
+            "        \"currency\": \"USD\",\n"
             "        \"service\": \"VM\"\n"
             "      },\n"
             "      {\n"
             "        \"cost\": 5.0,\n"
+            "        \"currency\": \"USD\",\n"
             "        \"service\": \"Storage\"\n"
             "      }\n"
             "    ],\n"
             "    \"total\": 12.5\n"
             "  }\n"
             "]\n");
+}
+
+TEST(RenderTest, CostJsonIncludesCurrency) {
+  std::ostringstream out;
+
+  azdash::render_costs({{.service = "VM", .previous = 100.0, .current = 150.0, .delta = 50.0, .delta_percent = 50.0, .currency = "EUR"}},
+                       200.0, azdash::OutputFormat::Json, out);
+
+  const auto content = out.str();
+  EXPECT_NE(content.find("\"currency\": \"EUR\""), std::string::npos);
+  EXPECT_NE(content.find("\"service\": \"VM\""), std::string::npos);
 }
 
 TEST(RenderTest, TrendCsvNeutralizesFormulaInjection) {
