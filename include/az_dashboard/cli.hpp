@@ -146,6 +146,8 @@ struct CliRuntime {
   const ICliSubscriptionAliasStore& alias_store;
   const ICliCostHistoryStore& history_store;
   const IWebhookSender* webhook_sender{nullptr};
+  std::istream* in{nullptr};
+  const ICommandRunner* runner{nullptr};
 };
 
 /**

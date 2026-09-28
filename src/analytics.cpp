@@ -18,15 +18,42 @@ auto total_cost(const std::vector<ServiceCost>& costs) -> double {
   return total;
 }
 
-auto compute_projection(double current_total) -> double {
+auto compute_projection(double current_total,
+                        ProjectionMode mode,
+                        std::span<const double> historical_totals) -> double {
   auto now = std::chrono::system_clock::now();
   std::chrono::year_month_day ymd{std::chrono::floor<std::chrono::days>(now)};
   std::chrono::year_month_day last_day{ymd.year() / ymd.month() / std::chrono::last};
   int days_in_month = static_cast<int>(static_cast<unsigned>(last_day.day()));
   int days_elapsed = static_cast<int>(static_cast<unsigned>(ymd.day()));
-  
+
   if (days_elapsed == 0) return current_total;
-  return (current_total / days_elapsed) * days_in_month;
+  double linear_projection = (current_total / static_cast<double>(days_elapsed)) * static_cast<double>(days_in_month);
+
+  if (mode == ProjectionMode::Linear || historical_totals.empty()) {
+    return linear_projection;
+  }
+
+  // Weighted projection using Bayesian shrinkage against historical baseline:
+  double total_weight = 0.0;
+  double weighted_sum = 0.0;
+  for (std::size_t i = 0; i < historical_totals.size(); ++i) {
+    double weight = static_cast<double>(i + 1);
+    weighted_sum += historical_totals[i] * weight;
+    total_weight += weight;
+  }
+  double baseline = total_weight > 0.0 ? (weighted_sum / total_weight) : 0.0;
+
+  double p = static_cast<double>(days_elapsed) / static_cast<double>(days_in_month);
+  if (p >= 1.0) {
+    return current_total;
+  }
+
+  return current_total + (1.0 - p) * baseline;
+}
+
+auto compute_projection(double current_total) -> double {
+  return compute_projection(current_total, ProjectionMode::Linear, {});
 }
 
 auto mean(const std::vector<double>& values) -> double {

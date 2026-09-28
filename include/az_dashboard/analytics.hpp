@@ -186,6 +186,17 @@ auto total_cost(const std::vector<ServiceCost>& costs) -> double;
 auto compute_projection(double current_total) -> double;
 
 /**
+ * @brief Computes end-of-month projected cost with optional historical weighting.
+ * @param current_total Cost elapsed in the current month.
+ * @param mode Projection mode (Linear or Weighted).
+ * @param historical_totals Totals from past closed months (ordered chronologically).
+ * @return Projected total at the end of the month.
+ */
+auto compute_projection(double current_total,
+                        ProjectionMode mode,
+                        std::span<const double> historical_totals = {}) -> double;
+
+/**
  * @brief Computes the arithmetic mean.
  * @param values Input values.
  * @return Mean, or 0.0 for an empty input.

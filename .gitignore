@@ -8,3 +8,4 @@ CMakeUserPresets.json
 *.suo
 *.pdf
 !docs/**/*.pdf
+0.26.0

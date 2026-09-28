@@ -66,6 +66,11 @@ struct SubscriptionAlias {
   std::string subscription;
 };
 
+enum class ProjectionMode {
+  Linear,
+  Weighted
+};
+
 /**
  * @brief Parsed command-line options shared by all workflows.
  *
@@ -95,6 +100,8 @@ struct CliOptions {
   bool fast_query{false};
   bool dry_run{false};
   std::string webhook_url;
+  bool interactive{false};
+  ProjectionMode projection_mode{ProjectionMode::Linear};
 };
 
 // Azure analysis domain models.

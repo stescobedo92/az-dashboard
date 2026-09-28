@@ -121,4 +121,23 @@ TEST(AnalyticsTest, CompareCostsPropagatesCurrencyFromInputs) {
   EXPECT_EQ(rows[0].currency, "EUR");
 }
 
+TEST(AnalyticsTest, ComputeProjectionLinearScalesCorrectly) {
+  const double proj_linear = azdash::compute_projection(100.0);
+  EXPECT_GE(proj_linear, 100.0);
+
+  const double proj_explicit = azdash::compute_projection(100.0, azdash::ProjectionMode::Linear, {});
+  EXPECT_DOUBLE_EQ(proj_linear, proj_explicit);
+}
+
+TEST(AnalyticsTest, ComputeProjectionWeightedStabilizesWithHistoricalBaseline) {
+  const std::vector<double> history{500.0, 520.0, 510.0};
+  const double proj_weighted = azdash::compute_projection(100.0, azdash::ProjectionMode::Weighted, history);
+  EXPECT_GT(proj_weighted, 0.0);
+
+  // When history is empty, weighted mode falls back to linear
+  const double fallback = azdash::compute_projection(100.0, azdash::ProjectionMode::Weighted, {});
+  const double linear = azdash::compute_projection(100.0, azdash::ProjectionMode::Linear, {});
+  EXPECT_DOUBLE_EQ(fallback, linear);
+}
+
 } // namespace

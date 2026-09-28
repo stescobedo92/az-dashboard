@@ -151,6 +151,17 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.dry_run = true;
   } else if (token == "--webhook" || token == "--webhook-url") {
     options.webhook_url = require_value(args, index, token);
+  } else if (token == "--interactive" || token == "-i") {
+    options.interactive = true;
+  } else if (token == "--projection") {
+    const auto val = require_value(args, index, token);
+    if (val == "weighted") {
+      options.projection_mode = ProjectionMode::Weighted;
+    } else if (val == "linear") {
+      options.projection_mode = ProjectionMode::Linear;
+    } else {
+      throw std::invalid_argument("unknown projection mode: " + val + " (expected linear or weighted)");
+    }
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -455,7 +466,17 @@ auto execute_cost(const CliOptions& options, const CliRuntime& runtime) -> int {
   const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
   const auto current = runtime.cost_provider.current_month_costs(resolved_options);
   const auto previous = runtime.cost_provider.previous_month_costs(resolved_options);
-  double projected_total = compute_projection(total_cost(current));
+  double projected_total = 0.0;
+  if (options.projection_mode == ProjectionMode::Weighted) {
+    const auto trends = runtime.trend_provider.six_month_trends(resolved_options);
+    std::vector<double> past_totals;
+    for (std::size_t i = 0; i + 1 < trends.size(); ++i) {
+      past_totals.push_back(trends[i].total);
+    }
+    projected_total = compute_projection(total_cost(current), options.projection_mode, past_totals);
+  } else {
+    projected_total = compute_projection(total_cost(current));
+  }
   render_costs(compare_costs(current, previous), projected_total,
                options.output, runtime.out);
   record_cost_snapshot(resolved_options, current, runtime);
@@ -532,7 +553,8 @@ auto execute_anomaly(const CliOptions& options, const CliRuntime& runtime) -> in
     past_totals.push_back(trends[index].total);
   }
 
-  const auto projected = trends.empty() ? 0.0 : compute_projection(trends.back().total);
+  const auto projected =
+      trends.empty() ? 0.0 : compute_projection(trends.back().total, options.projection_mode, past_totals);
   const auto assessment = assess_cost_anomaly(past_totals, projected);
   if (!assessment.enough_data) {
     render_error("Not enough data to detect anomalies.", runtime.err);
@@ -572,6 +594,63 @@ auto execute_trend(const CliOptions& options, const CliRuntime& runtime) -> int 
   return 0;
 }
 
+[[nodiscard]] auto get_remediation_command(const WasteFinding& finding) -> std::string {
+  if (finding.resource_type == "Microsoft.Compute/disks") {
+    return "az disk delete --ids \"" + finding.resource_id + "\" --yes";
+  } else if (finding.resource_type == "Microsoft.Network/publicIPAddresses") {
+    return "az network public-ip delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Compute/snapshots") {
+    return "az snapshot delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Network/networkSecurityGroups") {
+    return "az network nsg delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Network/routeTables") {
+    return "az network route-table delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Network/natGateways") {
+    return "az network nat gateway delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Web/serverfarms") {
+    return "az appservice plan delete --ids \"" + finding.resource_id + "\" --yes";
+  } else if (finding.resource_type == "Microsoft.Compute/virtualMachines") {
+    return "az vm delete --ids \"" + finding.resource_id + "\" --yes";
+  }
+  return "az resource delete --ids \"" + finding.resource_id + "\"";
+}
+
+[[nodiscard]] auto parse_command_tokens(const std::string& cmd_line) -> ProcessCommand {
+  ProcessCommand cmd;
+  std::istringstream stream(cmd_line);
+  std::string token;
+  while (stream >> std::quoted(token)) {
+    if (cmd.executable.empty()) {
+      cmd.executable = token;
+    } else {
+      cmd.arguments.push_back(token);
+    }
+  }
+  return cmd;
+}
+
+[[nodiscard]] auto execute_remediation_command(const std::string& cmd_line, const ICommandRunner* runner) -> bool {
+  auto cmd = parse_command_tokens(cmd_line);
+  if (cmd.executable.empty()) {
+    return false;
+  }
+  if (runner) {
+    try {
+      auto res = runner->run(cmd);
+      return res.exit_code == 0;
+    } catch (...) {
+      return false;
+    }
+  }
+  ShellCommandRunner default_runner;
+  try {
+    auto res = default_runner.run(cmd);
+    return res.exit_code == 0;
+  } catch (...) {
+    return false;
+  }
+}
+
 auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int {
   const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
   auto findings = runtime.waste_provider.waste_findings(resolved_options);
@@ -597,6 +676,54 @@ auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int 
     })) {
       runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
     }
+  }
+
+  if (options.interactive) {
+    auto& input_stream = runtime.in ? *runtime.in : std::cin;
+    std::size_t remediated_count = 0;
+    runtime.out << "\n[Interactive Remediation Mode]\n";
+    runtime.out << "Found " << findings.size() << " waste items to review:\n\n";
+
+    for (std::size_t i = 0; i < findings.size(); ++i) {
+      const auto& finding = findings[i];
+      runtime.out << "[" << (i + 1) << "/" << findings.size() << "] "
+                  << finding.check << ": " << finding.name << " (" << finding.resource_type << ")\n"
+                  << "  Recommendation: " << finding.recommendation << "\n"
+                  << "  Monthly Savings: " << finding.estimated_monthly_savings << " " << finding.currency << "\n";
+
+      const auto cmd_str = get_remediation_command(finding);
+      runtime.out << "  Command: " << cmd_str << "\n"
+                  << "  Apply remediation? [y/N]: ";
+      runtime.out.flush();
+
+      std::string answer;
+      if (std::getline(input_stream, answer)) {
+        while (!answer.empty() && std::isspace(static_cast<unsigned char>(answer.front()))) answer.erase(answer.begin());
+        while (!answer.empty() && std::isspace(static_cast<unsigned char>(answer.back()))) answer.pop_back();
+
+        if (answer == "y" || answer == "Y" || answer == "yes" || answer == "YES") {
+          if (options.dry_run) {
+            runtime.out << "  [Dry-run] Would execute: " << cmd_str << "\n\n";
+            ++remediated_count;
+          } else {
+            runtime.out << "  Executing: " << cmd_str << " ...\n";
+            bool success = execute_remediation_command(cmd_str, runtime.runner);
+            if (success) {
+              runtime.out << "  -> Remediation successful.\n\n";
+              ++remediated_count;
+            } else {
+              runtime.out << "  -> Remediation failed.\n\n";
+            }
+          }
+        } else {
+          runtime.out << "  -> Skipped.\n\n";
+        }
+      }
+    }
+    render_success("Interactive Remediation Complete",
+                   std::to_string(remediated_count) + " of " + std::to_string(findings.size()) + " resources remediated.",
+                   runtime.out);
+    return 0;
   }
 
   if (options.dry_run) {
@@ -797,9 +924,10 @@ auto run(const CliOptions& options) -> int {
   auto alias_store = LocalSubscriptionAliasStore();
   auto history_store = LocalCostHistoryStore();
   auto webhook_sender = DefaultWebhookSender();
+  auto runner = ShellCommandRunner();
   auto runtime = CliRuntime{std::cout, std::cerr,     provider,     provider,
                             provider,  provider,      report_writer, alias_store,
-                            history_store, &webhook_sender};
+                            history_store, &webhook_sender, &std::cin, &runner};
   return run(options, runtime);
 }
 
@@ -840,6 +968,8 @@ Global flags:
   --group-by-tag <key>                Group costs by a specific Azure tag (overrides --group-by).
   --filter-tag <key=value>            Filter costs by Azure tag.
   --generate-remediation <path>       Generate a bash script to remediate waste findings.
+  -i, --interactive                   Review waste findings and apply remediations interactively.
+  --projection <linear|weighted>      Cost projection model (linear or weighted by past trends). Defaults to linear.
   --function-memory-threshold <pct>   Compatibility threshold for function checks.
   --secrets-idle-days <days>          Compatibility threshold for secret checks.
   --fail-if-exceeds <cost>            Return exit code 2 if total cost exceeds this amount.
@@ -850,6 +980,7 @@ Global flags:
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault
+
 
 Alias examples:
   azdash alias-sub set prod 00000000-0000-0000-0000-000000000000

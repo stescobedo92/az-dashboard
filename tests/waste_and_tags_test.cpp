@@ -13,12 +13,16 @@ namespace {
 
 class FakeScriptRunner final : public azdash::ICommandRunner {
 public:
+  FakeScriptRunner() = default;
   explicit FakeScriptRunner(std::vector<azdash::CommandResult> results) : results_(std::move(results)) {}
 
   [[nodiscard]] auto run(const azdash::ProcessCommand& command,
                          const azdash::ProcessRunnerOptions& options) const -> azdash::CommandResult override {
-    (void)command;
     (void)options;
+    executed_commands.push_back(command);
+    if (results_.empty()) {
+      return {0, "[]", ""};
+    }
     if (next_ >= results_.size()) {
       return {1, "[]", "unexpected command"};
     }
@@ -27,6 +31,7 @@ public:
 
   std::vector<azdash::CommandResult> results_;
   mutable std::size_t next_{0};
+  mutable std::vector<azdash::ProcessCommand> executed_commands;
 };
 
 TEST(MultiTagFilterTest, FiltersByExactAndOrValues) {
@@ -176,7 +181,7 @@ class FakeWasteRuntime final : public azdash::ICliAccountProvider,
                               public azdash::ICliCostHistoryStore {
 public:
   [[nodiscard]] auto runtime() const -> azdash::CliRuntime {
-    return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this, *this, *this};
+    return azdash::CliRuntime{out, err, *this, *this, *this, *this, *this, *this, *this, nullptr, &in, &runner};
   }
 
   [[nodiscard]] auto account(const azdash::CliOptions&) const -> azdash::AccountInfo override {
@@ -210,6 +215,8 @@ public:
 
   mutable std::ostringstream out;
   mutable std::ostringstream err;
+  mutable std::istringstream in;
+  mutable FakeScriptRunner runner;
 };
 
 TEST(CliWasteRemediationTest, GeneratesDeleteCommandsForNewResourceTypes) {
@@ -257,11 +264,62 @@ TEST(CliWasteRemediationTest, DryRunSkipsFileCreation) {
   EXPECT_TRUE(fake_runtime.out.str().find("Dry Run Complete") != std::string::npos);
 }
 
+TEST(CliWasteRemediationTest, InteractiveRemediationAppliesConfirmedAndSkipsRejected) {
+  FakeWasteRuntime fake_runtime;
+  // 4 findings: "y" for 1st, "n" for 2nd, "yes" for 3rd, "" for 4th
+  fake_runtime.in.str("y\nn\nyes\n\n");
+
+  azdash::CliOptions options;
+  options.command = azdash::CommandKind::Waste;
+  options.interactive = true;
+
+  const auto exit_code = azdash::run(options, fake_runtime.runtime());
+  EXPECT_EQ(exit_code, 0);
+
+  const auto output = fake_runtime.out.str();
+  EXPECT_TRUE(output.find("[Interactive Remediation Mode]") != std::string::npos);
+  EXPECT_TRUE(output.find("Interactive Remediation Complete") != std::string::npos);
+  EXPECT_TRUE(output.find("2 of 4 resources remediated") != std::string::npos);
+  EXPECT_EQ(fake_runtime.runner.executed_commands.size(), 2u);
+}
+
+TEST(CliWasteRemediationTest, InteractiveRemediationRespectsDryRun) {
+  FakeWasteRuntime fake_runtime;
+  fake_runtime.in.str("y\ny\ny\ny\n");
+
+  azdash::CliOptions options;
+  options.command = azdash::CommandKind::Waste;
+  options.interactive = true;
+  options.dry_run = true;
+
+  const auto exit_code = azdash::run(options, fake_runtime.runtime());
+  EXPECT_EQ(exit_code, 0);
+
+  const auto output = fake_runtime.out.str();
+  EXPECT_TRUE(output.find("[Dry-run] Would execute:") != std::string::npos);
+  EXPECT_EQ(fake_runtime.runner.executed_commands.size(), 0u);
+}
+
 TEST(CliParserDryRunTest, ParsesDryRunFlag) {
   const std::vector<std::string> args = {"--dry-run", "waste"};
   const auto options = azdash::parse_args(args);
   EXPECT_TRUE(options.dry_run);
   EXPECT_EQ(options.command, azdash::CommandKind::Waste);
+}
+
+TEST(CliParserInteractiveTest, ParsesInteractiveAndProjectionFlags) {
+  const std::vector<std::string> args = {"-i", "--projection", "weighted", "waste"};
+  const auto options = azdash::parse_args(args);
+  EXPECT_TRUE(options.interactive);
+  EXPECT_EQ(options.projection_mode, azdash::ProjectionMode::Weighted);
+  EXPECT_EQ(options.command, azdash::CommandKind::Waste);
+
+  const std::vector<std::string> args_linear = {"--projection", "linear", "cost"};
+  const auto options_linear = azdash::parse_args(args_linear);
+  EXPECT_EQ(options_linear.projection_mode, azdash::ProjectionMode::Linear);
+
+  const std::vector<std::string> args_bad = {"--projection", "invalid", "cost"};
+  EXPECT_THROW((void)azdash::parse_args(args_bad), std::invalid_argument);
 }
 
 } // namespace
