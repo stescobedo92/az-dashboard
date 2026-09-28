@@ -162,6 +162,10 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     } else {
       throw std::invalid_argument("unknown projection mode: " + val + " (expected linear or weighted)");
     }
+  } else if (token == "--management-group" || token == "--mg") {
+    options.management_group = require_value(args, index, token);
+  } else if (token == "--budget") {
+    options.budget_filter = require_value(args, index, token);
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -254,6 +258,9 @@ private:
       collect_selectors(options, args, index);
     } else if (command == "waste") {
       options.command = CommandKind::Waste;
+      collect_selectors(options, args, index);
+    } else if (command == "budget") {
+      options.command = CommandKind::Budget;
       collect_selectors(options, args, index);
     } else if (command == "version") {
       options.command = CommandKind::Version;
@@ -503,6 +510,21 @@ auto execute_cost(const CliOptions& options, const CliRuntime& runtime) -> int {
         .details = det.str(),
     })) {
       runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
+  if (runtime.budget_provider && !options.budget_filter.empty()) {
+    auto budgets = runtime.budget_provider->budgets(resolved_options);
+    for (const auto& b : budgets) {
+      if (b.name == options.budget_filter || b.name.find(options.budget_filter) != std::string::npos) {
+        if (b.amount > 0.0 && projected_total > b.amount) {
+          std::ostringstream warn;
+          warn << std::fixed << std::setprecision(2);
+          warn << "\n[!] Azure Budget Warning: Projected spend (" << projected_total << " " << b.currency
+               << ") exceeds budget '" << b.name << "' (" << b.amount << " " << b.currency << ")\n";
+          runtime.out << warn.str();
+        }
+      }
     }
   }
 
@@ -823,6 +845,59 @@ auto execute_ui(const CliOptions& options, const CliRuntime& runtime) -> int {
   return run_tui(options, runtime);
 }
 
+auto execute_budget(const CliOptions& options, const CliRuntime& runtime) -> int {
+  if (!runtime.budget_provider) {
+    render_error("No budget provider available in runtime.", runtime.err);
+    return 1;
+  }
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  auto budgets = runtime.budget_provider->budgets(resolved_options);
+  if (!options.budget_filter.empty()) {
+    std::erase_if(budgets, [&](const BudgetInfo& b) {
+      return b.name.find(options.budget_filter) == std::string::npos;
+    });
+  } else if (!options.selectors.empty()) {
+    std::erase_if(budgets, [&](const BudgetInfo& b) {
+      return std::ranges::none_of(options.selectors, [&](const std::string& sel) {
+        return b.name.find(sel) != std::string::npos;
+      });
+    });
+  }
+  render_budgets(budgets, options.output, runtime.out);
+
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    std::size_t exceeded_count = 0;
+    for (const auto& b : budgets) {
+      if (b.amount > 0.0 && b.current_spend > b.amount) {
+        ++exceeded_count;
+      }
+    }
+    std::ostringstream msg;
+    msg << "Checked " << budgets.size() << " Azure budgets. "
+        << exceeded_count << " budget(s) exceeded limit.";
+    const std::string status = exceeded_count > 0 ? "warning" : "info";
+    if (!runtime.webhook_sender->send(options.webhook_url, WebhookPayload{
+        .title = "Azure Budget Alert",
+        .status = status,
+        .subscription = subscription_label(resolved_options.subscriptions),
+        .message = msg.str(),
+        .details = std::to_string(exceeded_count) + " exceeded",
+    })) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
+  if (options.fail_if_exceeds_cost.has_value()) {
+    for (const auto& b : budgets) {
+      if (b.current_spend > options.fail_if_exceeds_cost.value()) {
+        return 2;
+      }
+    }
+  }
+
+  return 0;
+}
+
 using ScreenWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&);
 using ReportWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&, const AccountInfo&);
 
@@ -844,6 +919,7 @@ constexpr auto screen_workflows = std::array{
     ScreenWorkflowDefinition{CommandKind::Trend, execute_trend},
     ScreenWorkflowDefinition{CommandKind::Waste, execute_waste},
     ScreenWorkflowDefinition{CommandKind::UI, execute_ui},
+    ScreenWorkflowDefinition{CommandKind::Budget, execute_budget},
 };
 
 constexpr auto report_workflows = std::array{
@@ -927,7 +1003,7 @@ auto run(const CliOptions& options) -> int {
   auto runner = ShellCommandRunner();
   auto runtime = CliRuntime{std::cout, std::cerr,     provider,     provider,
                             provider,  provider,      report_writer, alias_store,
-                            history_store, &webhook_sender, &std::cin, &runner};
+                            history_store, &webhook_sender, &std::cin, &runner, &provider};
   return run(options, runtime);
 }
 
@@ -946,6 +1022,7 @@ auto help_text() -> std::string {
 Usage:
   azdash link-account
   azdash [global flags] cost
+  azdash [global flags] budget [names...]
   azdash [global flags] trend [services...]
   azdash [global flags] waste [checks...]
   azdash [global flags] report cost [--path file-or-directory]
@@ -961,6 +1038,8 @@ Usage:
 Global flags:
   --subscription <id-name-or-alias>   Azure subscription override (can be used multiple times).
   --all-subscriptions                 Analyze all accessible subscriptions.
+  --management-group, --mg <id>       Target an Azure Management Group hierarchy recursively.
+  --budget <name>                     Filter Azure budget by name.
   --tenant <id>                       Reserved for tenant-aware providers.
   -o, --output <table|json|csv|markdown>  Output format. Defaults to table.
   --path <file-or-directory>          Report output path.

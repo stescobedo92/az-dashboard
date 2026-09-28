@@ -568,6 +568,93 @@ private:
   const std::vector<SubscriptionAlias>& rows_;
 };
 
+class BudgetsView {
+public:
+  explicit BudgetsView(const std::vector<BudgetInfo>& rows) : rows_(rows) {}
+
+  [[nodiscard]] auto footer() const -> ftxui::Element {
+    return ftxui::text("");
+  }
+
+  [[nodiscard]] auto json() const -> nlohmann::json {
+    nlohmann::json payload = nlohmann::json::array();
+    for (const auto& b : rows_) {
+      double usage_pct = b.amount > 0.0 ? (b.current_spend / b.amount) * 100.0 : 0.0;
+      payload.push_back({
+          {"name", b.name},
+          {"amount", b.amount},
+          {"current_spend", b.current_spend},
+          {"usage_percent", usage_pct},
+          {"currency", b.currency},
+          {"time_grain", b.time_grain},
+          {"start_date", b.start_date},
+          {"end_date", b.end_date},
+      });
+    }
+    return payload;
+  }
+
+  void csv(CsvDocumentWriter& csv) const {
+    csv.header("name,amount,current_spend,usage_percent,currency,time_grain,start_date,end_date");
+    for (const auto& b : rows_) {
+      csv.row([&b](CsvRowWriter& writer) {
+        writer.escaped_cell(b.name);
+        writer.raw_cell(NumberFormatter::money(b.amount));
+        writer.raw_cell(NumberFormatter::money(b.current_spend));
+        double usage_pct = b.amount > 0.0 ? (b.current_spend / b.amount) * 100.0 : 0.0;
+        writer.raw_cell(NumberFormatter::percent(usage_pct));
+        writer.escaped_cell(b.currency);
+        writer.escaped_cell(b.time_grain);
+        writer.escaped_cell(b.start_date);
+        writer.escaped_cell(b.end_date);
+      });
+    }
+  }
+
+  [[nodiscard]] auto table() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{
+        {"Budget", "Amount", "Spend", "Usage %", "Usage Bar", "Status"}};
+    for (const auto& b : rows_) {
+      double usage_pct = b.amount > 0.0 ? (b.current_spend / b.amount) * 100.0 : 0.0;
+      std::string status = (b.current_spend > b.amount && b.amount > 0.0) ? "EXCEEDED" : "OK";
+      rows.push_back({
+          b.name,
+          NumberFormatter::money(b.amount) + " " + b.currency,
+          NumberFormatter::money(b.current_spend) + " " + b.currency,
+          NumberFormatter::percent(usage_pct),
+          progress_bar(b.current_spend, b.amount),
+          status,
+      });
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_rows() const -> std::vector<std::vector<std::string>> {
+    std::vector<std::vector<std::string>> rows{
+        {"Budget Name", "Amount", "Current Spend", "Usage %", "Time Grain", "Status"}};
+    for (const auto& b : rows_) {
+      double usage_pct = b.amount > 0.0 ? (b.current_spend / b.amount) * 100.0 : 0.0;
+      std::string status = (b.current_spend > b.amount && b.amount > 0.0) ? "EXCEEDED" : "OK";
+      rows.push_back({
+          b.name,
+          NumberFormatter::money(b.amount) + " " + b.currency,
+          NumberFormatter::money(b.current_spend) + " " + b.currency,
+          NumberFormatter::percent(usage_pct),
+          b.time_grain,
+          status,
+      });
+    }
+    return rows;
+  }
+
+  [[nodiscard]] auto markdown_footer() const -> std::vector<std::string> {
+    return {};
+  }
+
+private:
+  const std::vector<BudgetInfo>& rows_;
+};
+
 template <typename RowsView>
 void render_rows(const RowsView& rows, OutputFormat format, std::ostream& out) {
   switch (format) {
@@ -608,6 +695,10 @@ void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, Out
 
 void render_cost_history(const std::vector<CostSnapshot>& rows, OutputFormat format, std::ostream& out) {
   render_rows(CostHistoryRowsView(rows), format, out);
+}
+
+void render_budgets(const std::vector<BudgetInfo>& budgets, OutputFormat format, std::ostream& out) {
+  render_rows(BudgetsView(budgets), format, out);
 }
 
 void render_help_screen(std::ostream& out) {

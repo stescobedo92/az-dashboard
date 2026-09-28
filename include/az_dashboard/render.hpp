@@ -49,6 +49,14 @@ void render_subscription_aliases(const std::vector<SubscriptionAlias>& rows, Out
 void render_cost_history(const std::vector<CostSnapshot>& rows, OutputFormat format, std::ostream& out);
 
 /**
+ * @brief Renders Azure budgets to an output stream.
+ * @param budgets Budget rows.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_budgets(const std::vector<BudgetInfo>& budgets, OutputFormat format, std::ostream& out);
+
+/**
  * @brief Renders interactive help.
  * @param out Output stream.
  */

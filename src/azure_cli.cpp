@@ -504,6 +504,14 @@ public:
     return build({"vm", "list", "-d"}, sub, tenant);
   }
 
+  [[nodiscard]] auto management_group_show(const std::string& mg_id, const std::string& tenant = "") const -> ProcessCommand {
+    return build({"account", "management-group", "show", "--name", mg_id, "--expand", "--recurse"}, "", tenant);
+  }
+
+  [[nodiscard]] auto consumption_budget(const std::string& sub, const std::string& tenant) const -> ProcessCommand {
+    return build({"consumption", "budget", "list"}, sub, tenant);
+  }
+
 private:
   [[nodiscard]] auto build(std::vector<std::string> arguments, const std::string& subscription, const std::string& tenant) const -> ProcessCommand {
     if (!subscription.empty()) {
@@ -574,7 +582,116 @@ AzureCliClient::AzureCliClient(std::shared_ptr<ICommandRunner> runner,
 }
 
 namespace {
+void extract_mg_subscriptions(const nlohmann::json& node, std::vector<std::string>& out_subs) {
+  if (node.is_null()) {
+    return;
+  }
+  if (node.is_array()) {
+    for (const auto& item : node) {
+      extract_mg_subscriptions(item, out_subs);
+    }
+    return;
+  }
+  if (!node.is_object()) {
+    return;
+  }
+
+  auto type = json_string(node, {"type"});
+  auto id = json_string(node, {"id", "name"});
+  if (type.find("subscriptions") != std::string::npos || id.find("/subscriptions/") != std::string::npos) {
+    auto name = json_string(node, {"name"});
+    if (name.empty() || name.find('/') != std::string::npos) {
+      constexpr std::string_view marker{"/subscriptions/"};
+      auto pos = id.find(marker);
+      if (pos != std::string::npos) {
+        auto sub_id = id.substr(pos + marker.size());
+        auto slash = sub_id.find('/');
+        name = sub_id.substr(0, slash);
+      }
+    }
+    if (!name.empty() && std::ranges::find(out_subs, name) == out_subs.end()) {
+      out_subs.push_back(name);
+    }
+  }
+
+  auto check_children = [&](const nlohmann::json& obj) {
+    if (obj.contains("children") && obj.at("children").is_array()) {
+      for (const auto& child : obj.at("children")) {
+        extract_mg_subscriptions(child, out_subs);
+      }
+    }
+  };
+  check_children(node);
+  if (node.contains("properties") && node.at("properties").is_object()) {
+    check_children(node.at("properties"));
+  }
+}
+
+auto parse_budget_items(const nlohmann::json& payload, const CliOptions& options) -> std::vector<BudgetInfo> {
+  std::vector<BudgetInfo> budgets;
+  if (!payload.is_array()) {
+    return budgets;
+  }
+  for (const auto& item : payload) {
+    const auto& props = (item.contains("properties") && item.at("properties").is_object())
+                            ? item.at("properties")
+                            : item;
+
+    auto name = json_string(item, {"name"});
+    if (name.empty()) {
+      name = json_string(props, {"name"});
+    }
+
+    if (!options.budget_filter.empty() && name.find(options.budget_filter) == std::string::npos) {
+      continue;
+    }
+
+    double amount = json_number(props, {"amount"});
+    double current_spend = 0.0;
+    std::string currency = "USD";
+    if (props.contains("currentSpend") && props.at("currentSpend").is_object()) {
+      current_spend = json_number(props.at("currentSpend"), {"amount"});
+      auto cur = json_string(props.at("currentSpend"), {"unit", "currency"});
+      if (!cur.empty()) {
+        currency = cur;
+      }
+    } else {
+      current_spend = json_number(props, {"currentSpend"});
+    }
+
+    std::string time_grain = json_string(props, {"timeGrain"});
+    if (time_grain.empty()) {
+      time_grain = "Monthly";
+    }
+
+    std::string start_date;
+    std::string end_date;
+    if (props.contains("timePeriod") && props.at("timePeriod").is_object()) {
+      start_date = json_string(props.at("timePeriod"), {"startDate"});
+      end_date = json_string(props.at("timePeriod"), {"endDate"});
+    }
+
+    budgets.push_back(BudgetInfo{
+        .name = std::move(name),
+        .amount = amount,
+        .current_spend = current_spend,
+        .time_grain = std::move(time_grain),
+        .start_date = std::move(start_date),
+        .end_date = std::move(end_date),
+        .currency = std::move(currency),
+    });
+  }
+  return budgets;
+}
+
 auto get_target_subscriptions(const CliOptions& options, const AzureJsonCommandExecutor& executor) -> std::vector<std::string> {
+  if (!options.management_group.empty()) {
+    AzureCommandBuilder commands;
+    auto payload = executor.run(commands.management_group_show(options.management_group, options.tenant));
+    std::vector<std::string> subs;
+    extract_mg_subscriptions(payload, subs);
+    return subs.empty() ? std::vector<std::string>{""} : subs;
+  }
   if (options.all_subscriptions) {
     AzureCommandBuilder commands;
     auto payload = executor.run(commands.account_list());
@@ -760,6 +877,27 @@ auto AzureCliClient::waste_findings(const CliOptions& options) const -> std::vec
   }
 
   return filter_selected(findings, options.selectors, [](const WasteFinding& finding) { return finding.check; });
+}
+
+auto AzureCliClient::budgets(const CliOptions& options) const -> std::vector<BudgetInfo> {
+  const AzureCommandBuilder commands;
+  const AzureJsonCommandExecutor executor{*runner_};
+  auto subs = get_target_subscriptions(options, executor);
+
+  auto all_budgets = parallel_transform(subs, [&](const std::string& sub) -> std::vector<BudgetInfo> {
+    try {
+      const auto payload = executor.run(commands.consumption_budget(sub, options.tenant));
+      return parse_budget_items(payload, options);
+    } catch (const std::exception&) {
+      return {};
+    }
+  });
+
+  std::vector<BudgetInfo> combined;
+  for (auto& b_list : all_budgets) {
+    combined.insert(combined.end(), std::make_move_iterator(b_list.begin()), std::make_move_iterator(b_list.end()));
+  }
+  return combined;
 }
 
 } // namespace azdash

@@ -53,6 +53,16 @@ public:
 };
 
 /**
+ * @brief Azure consumption budget provider required by budget workflows.
+ */
+class ICliBudgetProvider {
+public:
+  virtual ~ICliBudgetProvider() = default;
+
+  [[nodiscard]] virtual auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> = 0;
+};
+
+/**
  * @brief Report sink required by PDF report workflows.
  */
 class ICliReportWriter {
@@ -104,7 +114,8 @@ class IWebhookSender;
 class AzureClientAdapter : public ICliAccountProvider,
                            public ICliCostProvider,
                            public ICliTrendProvider,
-                           public ICliWasteProvider {
+                           public ICliWasteProvider,
+                           public ICliBudgetProvider {
 public:
   explicit AzureClientAdapter(std::shared_ptr<IAzureClient> client) : client_(std::move(client)) {}
 
@@ -128,6 +139,10 @@ public:
     return client_->waste_findings(options);
   }
 
+  [[nodiscard]] auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> override {
+    return client_->budgets(options);
+  }
+
 private:
   std::shared_ptr<IAzureClient> client_;
 };
@@ -148,6 +163,7 @@ struct CliRuntime {
   const IWebhookSender* webhook_sender{nullptr};
   std::istream* in{nullptr};
   const ICommandRunner* runner{nullptr};
+  const ICliBudgetProvider* budget_provider{nullptr};
 };
 
 /**

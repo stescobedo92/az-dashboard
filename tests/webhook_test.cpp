@@ -111,6 +111,12 @@ public:
          .currency = "USD"},
     };
   }
+
+  [[nodiscard]] auto budgets(const azdash::CliOptions&) const -> std::vector<azdash::BudgetInfo> override {
+    return {
+        {.name = "DefaultBudget", .amount = 1000.0, .current_spend = 300.0, .time_grain = "Monthly", .currency = "USD"}
+    };
+  }
 };
 
 } // namespace

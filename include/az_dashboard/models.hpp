@@ -38,7 +38,8 @@ enum class CommandKind {
   CostAnomaly,
   History,
   LinkAccount,
-  UI
+  UI,
+  Budget
 };
 
 /**
@@ -102,6 +103,8 @@ struct CliOptions {
   std::string webhook_url;
   bool interactive{false};
   ProjectionMode projection_mode{ProjectionMode::Linear};
+  std::string management_group;
+  std::string budget_filter;
 };
 
 // Azure analysis domain models.
@@ -159,6 +162,19 @@ struct WasteFinding {
   std::string location;
   std::string recommendation;
   double estimated_monthly_savings{0.0};
+  std::string currency{"USD"};
+};
+
+/**
+ * @brief Azure consumption budget information.
+ */
+struct BudgetInfo {
+  std::string name;
+  double amount{0.0};
+  double current_spend{0.0};
+  std::string time_grain{"Monthly"};
+  std::string start_date;
+  std::string end_date;
   std::string currency{"USD"};
 };
 

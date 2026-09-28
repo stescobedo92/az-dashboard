@@ -64,6 +64,7 @@ public:
   [[nodiscard]] virtual auto previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> = 0;
   [[nodiscard]] virtual auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> = 0;
   [[nodiscard]] virtual auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> = 0;
+  [[nodiscard]] virtual auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> = 0;
 };
 
 /**
@@ -117,6 +118,13 @@ public:
    * @return Waste findings.
    */
   [[nodiscard]] auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> override;
+
+  /**
+   * @brief Reads Azure consumption budgets.
+   * @param options Parsed CLI options.
+   * @return Active budget configurations and tracking status.
+   */
+  [[nodiscard]] auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> override;
 
 private:
   std::shared_ptr<ICommandRunner> runner_;
