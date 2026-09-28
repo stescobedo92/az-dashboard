@@ -22,8 +22,7 @@
 #include <string>
 #include <thread>
 
-#include <ftxui/component/component.hpp>
-#include <ftxui/component/screen_interactive.hpp>
+#include "az_dashboard/ui.hpp"
 
 namespace azdash {
 namespace {
@@ -655,90 +654,7 @@ auto execute_alias_sub(const CliOptions& options, const CliRuntime& runtime) -> 
 }
 
 auto execute_ui(const CliOptions& options, const CliRuntime& runtime) -> int {
-  using namespace ftxui;
-  auto screen = ScreenInteractive::Fullscreen();
-  
-  std::string status = "Loading Azure data...";
-  int tab_index = 0;
-  std::vector<std::string> tab_entries = { "Cost Trends", "Waste Findings" };
-  auto tab_selection = Menu(&tab_entries, &tab_index);
-  
-  std::vector<MonthCost> trends;
-  std::vector<WasteFinding> waste;
-  bool loaded = false;
-  
-  auto load_data = [&]() {
-      try {
-          const auto resolved = resolve_subscription_alias(options, runtime.alias_store);
-          trends = runtime.trend_provider.six_month_trends(resolved);
-          waste = runtime.waste_provider.waste_findings(resolved);
-          status = "Data loaded successfully.";
-          loaded = true;
-      } catch (const std::exception& e) {
-          status = std::string("Error: ") + e.what();
-      }
-  };
-  
-  std::thread loader_thread(load_data);
-  
-  auto main_container = Container::Vertical({
-      tab_selection,
-  });
-  
-  auto render_trends = [&]() {
-      if (!loaded) return text(status);
-      Elements lines;
-      for (const auto& t : trends) {
-          lines.push_back(text(t.month + ": $" + std::to_string(t.total)));
-      }
-      return vbox(lines);
-  };
-  
-  auto render_waste = [&]() {
-      if (!loaded) return text(status);
-      Elements lines;
-      for (const auto& w : waste) {
-          lines.push_back(text(w.resource_type + " | " + w.name + " | " + w.recommendation));
-      }
-      return vbox(lines);
-  };
-  
-  auto renderer = Renderer(main_container, [&] {
-      return vbox({
-          text("Azure Dashboard TUI") | bold | color(Color::Cyan),
-          separator(),
-          tab_selection->Render(),
-          separator(),
-          tab_index == 0 ? render_trends() : render_waste(),
-          separator(),
-          text(status) | color(loaded ? Color::Green : Color::Yellow),
-          text("Press 'q' to quit") | dim
-      }) | border;
-  });
-  
-  auto final_component = CatchEvent(renderer, [&](Event event) {
-      if (event == Event::Character('q')) {
-          screen.ExitLoopClosure()();
-          return true;
-      }
-      return false;
-  });
-  
-  std::atomic<bool> refresh_ui = true;
-  std::thread refresher([&] {
-      while (refresh_ui) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          screen.PostEvent(Event::Custom);
-      }
-  });
-  
-  screen.Loop(final_component);
-  
-  refresh_ui = false;
-  loader_thread.join();
-  refresher.join();
-  
-  return 0;
+  return run_tui(options, runtime);
 }
 
 using ScreenWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&);

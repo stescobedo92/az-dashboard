@@ -50,6 +50,7 @@ add_library(az_dashboard_lib STATIC
   src/render.cpp
   src/report.cpp
   src/subscription_aliases.cpp
+  src/ui.cpp
 )
 
 target_compile_features(az_dashboard_lib PUBLIC cxx_std_23)
@@ -131,6 +132,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/render_test.cpp
     tests/report_test.cpp
     tests/subscription_aliases_test.cpp
+    tests/ui_test.cpp
     tests/waste_and_tags_test.cpp
   )
   target_link_libraries(az-dashboard-tests PRIVATE az_dashboard_lib GTest::gtest_main)
