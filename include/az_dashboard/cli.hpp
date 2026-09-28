@@ -1,5 +1,6 @@
 #pragma once
 
+#include "az_dashboard/azure_cli.hpp"
 #include "az_dashboard/models.hpp"
 
 #include <filesystem>
@@ -95,6 +96,42 @@ public:
   [[nodiscard]] virtual auto snapshots() const -> std::vector<CostSnapshot> = 0;
 };
 
+class IWebhookSender;
+
+/**
+ * @brief Adapter wrapping an IAzureClient to satisfy CLI account, cost, trend, and waste providers.
+ */
+class AzureClientAdapter : public ICliAccountProvider,
+                           public ICliCostProvider,
+                           public ICliTrendProvider,
+                           public ICliWasteProvider {
+public:
+  explicit AzureClientAdapter(std::shared_ptr<IAzureClient> client) : client_(std::move(client)) {}
+
+  [[nodiscard]] auto account(const CliOptions& options) const -> AccountInfo override {
+    return client_->account(options);
+  }
+
+  [[nodiscard]] auto current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> override {
+    return client_->current_month_costs(options);
+  }
+
+  [[nodiscard]] auto previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> override {
+    return client_->previous_month_costs(options);
+  }
+
+  [[nodiscard]] auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> override {
+    return client_->six_month_trends(options);
+  }
+
+  [[nodiscard]] auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> override {
+    return client_->waste_findings(options);
+  }
+
+private:
+  std::shared_ptr<IAzureClient> client_;
+};
+
 /**
  * @brief Runtime dependencies used by the CLI dispatcher.
  */
@@ -108,6 +145,7 @@ struct CliRuntime {
   const ICliReportWriter& report_writer;
   const ICliSubscriptionAliasStore& alias_store;
   const ICliCostHistoryStore& history_store;
+  const IWebhookSender* webhook_sender{nullptr};
 };
 
 /**

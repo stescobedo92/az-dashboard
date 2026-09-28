@@ -23,6 +23,7 @@
 #include <thread>
 
 #include "az_dashboard/ui.hpp"
+#include "az_dashboard/webhook.hpp"
 
 namespace azdash {
 namespace {
@@ -148,6 +149,8 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.fast_query = true;
   } else if (token == "--dry-run") {
     options.dry_run = true;
+  } else if (token == "--webhook" || token == "--webhook-url") {
+    options.webhook_url = require_value(args, index, token);
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -326,35 +329,12 @@ private:
   }
 };
 
-class AzureCliRuntimeProvider final : public ICliAccountProvider,
-                                      public ICliCostProvider,
-                                      public ICliTrendProvider,
-                                      public ICliWasteProvider {
+class AzureCliRuntimeProvider final : public AzureClientAdapter {
 public:
-  AzureCliRuntimeProvider() : client_(make_client()) {}
-
-  [[nodiscard]] auto account(const CliOptions& options) const -> AccountInfo override {
-    return client_.account(options);
-  }
-
-  [[nodiscard]] auto current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> override {
-    return client_.current_month_costs(options);
-  }
-
-  [[nodiscard]] auto previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> override {
-    return client_.previous_month_costs(options);
-  }
-
-  [[nodiscard]] auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> override {
-    return client_.six_month_trends(options);
-  }
-
-  [[nodiscard]] auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> override {
-    return client_.waste_findings(options);
-  }
-
-private:
-  AzureCliClient client_;
+  AzureCliRuntimeProvider()
+      : AzureClientAdapter(std::make_shared<AzureCliClient>(make_client())) {}
+  explicit AzureCliRuntimeProvider(std::shared_ptr<IAzureClient> client)
+      : AzureClientAdapter(std::move(client)) {}
 };
 
 class PdfReportWriter final : public ICliReportWriter {
@@ -480,6 +460,31 @@ auto execute_cost(const CliOptions& options, const CliRuntime& runtime) -> int {
                options.output, runtime.out);
   record_cost_snapshot(resolved_options, current, runtime);
 
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    const double total = total_cost(current);
+    const std::string currency = current.empty() ? "USD" : current.front().currency;
+    std::string status = "info";
+    std::ostringstream msg;
+    msg << std::fixed << std::setprecision(2);
+    msg << "Current month cost: " << total << " " << currency;
+    if (options.fail_if_exceeds_cost.has_value() && total > options.fail_if_exceeds_cost.value()) {
+      status = "danger";
+      msg << " (Budget EXCEEDED: limit " << options.fail_if_exceeds_cost.value() << " " << currency << ")";
+    }
+    std::ostringstream det;
+    det << std::fixed << std::setprecision(2);
+    det << "Projected month-end: " << projected_total << " " << currency;
+    if (!runtime.webhook_sender->send(options.webhook_url, WebhookPayload{
+        .title = "Azure Cost Alert",
+        .status = status,
+        .subscription = subscription_label(resolved_options.subscriptions),
+        .message = msg.str(),
+        .details = det.str(),
+    })) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
   if (options.fail_if_exceeds_cost.has_value()) {
       double total = total_cost(current);
       if (total > options.fail_if_exceeds_cost.value()) {
@@ -545,6 +550,18 @@ auto execute_anomaly(const CliOptions& options, const CliRuntime& runtime) -> in
             << " is within the six-month baseline (mean " << assessment.mean << ", stddev "
             << assessment.stddev << ", z-score " << assessment.zscore << ").";
   }
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    if (!runtime.webhook_sender->send(options.webhook_url, WebhookPayload{
+        .title = "Azure Cost Anomaly Alert",
+        .status = assessment.anomalous ? "warning" : "info",
+        .subscription = subscription_label(resolved_options.subscriptions),
+        .message = message.str(),
+        .details = "Z-Score: " + std::to_string(assessment.zscore),
+    })) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
   render_success("Cost Anomaly", message.str(), runtime.out);
   return 0;
 }
@@ -559,6 +576,28 @@ auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int 
   const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
   auto findings = runtime.waste_provider.waste_findings(resolved_options);
   render_waste(findings, options.output, runtime.out);
+
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    double potential_savings = 0.0;
+    for (const auto& finding : findings) {
+      potential_savings += finding.estimated_monthly_savings;
+    }
+    const std::string currency = findings.empty() ? "USD" : findings.front().currency;
+    std::ostringstream msg;
+    msg << std::fixed << std::setprecision(2);
+    msg << "Detected " << findings.size() << " waste items. Potential monthly savings: "
+        << potential_savings << " " << currency;
+    const std::string status = findings.empty() ? "info" : "warning";
+    if (!runtime.webhook_sender->send(options.webhook_url, WebhookPayload{
+        .title = "Azure FinOps Waste Alert",
+        .status = status,
+        .subscription = subscription_label(resolved_options.subscriptions),
+        .message = msg.str(),
+        .details = options.dry_run ? "Dry-run execution" : (!options.remediation_path.empty() ? "Remediation script generated: " + options.remediation_path : ""),
+    })) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
 
   if (options.dry_run) {
     std::ostringstream msg;
@@ -757,9 +796,10 @@ auto run(const CliOptions& options) -> int {
   auto report_writer = PdfReportWriter();
   auto alias_store = LocalSubscriptionAliasStore();
   auto history_store = LocalCostHistoryStore();
+  auto webhook_sender = DefaultWebhookSender();
   auto runtime = CliRuntime{std::cout, std::cerr,     provider,     provider,
                             provider,  provider,      report_writer, alias_store,
-                            history_store};
+                            history_store, &webhook_sender};
   return run(options, runtime);
 }
 
@@ -806,6 +846,7 @@ Global flags:
   --no-cache                          Bypass local cache for historical trend data.
   --fast                              Use server-side JMESPath query projection to minimize payload size.
   --dry-run                           Simulate execution without modifying or creating resources.
+  --webhook, --webhook-url <url>      Send alert notification payload to Slack, Teams, or generic webhook URL.
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault

@@ -94,6 +94,7 @@ struct CliOptions {
   bool no_cache{false};
   bool fast_query{false};
   bool dry_run{false};
+  std::string webhook_url;
 };
 
 // Azure analysis domain models.

@@ -53,13 +53,27 @@ public:
 class ITrendCacheStore;
 
 /**
+ * @brief Abstract interface for Azure FinOps data retrieval.
+ */
+class IAzureClient {
+public:
+  virtual ~IAzureClient() = default;
+
+  [[nodiscard]] virtual auto account(const CliOptions& options) const -> AccountInfo = 0;
+  [[nodiscard]] virtual auto current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> = 0;
+  [[nodiscard]] virtual auto previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> = 0;
+  [[nodiscard]] virtual auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> = 0;
+  [[nodiscard]] virtual auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> = 0;
+};
+
+/**
  * @brief Azure data provider implemented through the Azure CLI.
  *
  * User-controlled subscription and tenant values are passed as typed argv
  * arguments. Azure CLI failures or invalid JSON are reported as exceptions with
  * sensitive selectors redacted from command summaries.
  */
-class AzureCliClient {
+class AzureCliClient : public IAzureClient {
 public:
   /**
    * @brief Creates a client with a process runner and optional trend cache.
@@ -74,35 +88,35 @@ public:
    * @param options Parsed CLI options.
    * @return Account information from az account show.
    */
-  [[nodiscard]] auto account(const CliOptions& options) const -> AccountInfo;
+  [[nodiscard]] auto account(const CliOptions& options) const -> AccountInfo override;
 
   /**
    * @brief Reads current-month costs grouped by service.
    * @param options Parsed CLI options.
    * @return Service costs for the current billing window.
    */
-  [[nodiscard]] auto current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost>;
+  [[nodiscard]] auto current_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> override;
 
   /**
    * @brief Reads previous-month costs grouped by service for the same day window.
    * @param options Parsed CLI options.
    * @return Service costs for the previous comparable billing window.
    */
-  [[nodiscard]] auto previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost>;
+  [[nodiscard]] auto previous_month_costs(const CliOptions& options) const -> std::vector<ServiceCost> override;
 
   /**
    * @brief Reads six months of cost trends.
    * @param options Parsed CLI options.
    * @return Monthly cost aggregates.
    */
-  [[nodiscard]] auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost>;
+  [[nodiscard]] auto six_month_trends(const CliOptions& options) const -> std::vector<MonthCost> override;
 
   /**
    * @brief Detects Azure waste from Advisor cost recommendations and resource heuristics.
    * @param options Parsed CLI options.
    * @return Waste findings.
    */
-  [[nodiscard]] auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding>;
+  [[nodiscard]] auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> override;
 
 private:
   std::shared_ptr<ICommandRunner> runner_;

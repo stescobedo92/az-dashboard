@@ -51,6 +51,7 @@ add_library(az_dashboard_lib STATIC
   src/report.cpp
   src/subscription_aliases.cpp
   src/ui.cpp
+  src/webhook.cpp
 )
 
 target_compile_features(az_dashboard_lib PUBLIC cxx_std_23)
@@ -134,6 +135,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/subscription_aliases_test.cpp
     tests/ui_test.cpp
     tests/waste_and_tags_test.cpp
+    tests/webhook_test.cpp
   )
   target_link_libraries(az-dashboard-tests PRIVATE az_dashboard_lib GTest::gtest_main)
   az_dashboard_apply_sanitizers(az-dashboard-tests)
