@@ -1,6 +1,7 @@
 #pragma once
 
 #include "az_dashboard/azure_cli.hpp"
+#include "az_dashboard/cli_parser.hpp"
 #include "az_dashboard/models.hpp"
 
 #include <filesystem>

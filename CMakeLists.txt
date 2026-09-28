@@ -46,6 +46,7 @@ add_library(az_dashboard_lib STATIC
   src/azure_rest.cpp
   src/cache.cpp
   src/cli.cpp
+  src/cli_parser.cpp
   src/history.cpp
   src/process_runner.cpp
   src/render.cpp
@@ -129,6 +130,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/azure_rest_test.cpp
     tests/budget_test.cpp
     tests/cache_test.cpp
+    tests/cli_parser_test.cpp
     tests/cli_test.cpp
     tests/commitments_test.cpp
     tests/concurrency_test.cpp
