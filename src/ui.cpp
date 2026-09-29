@@ -185,6 +185,218 @@ auto render_tui_cost_element(const std::vector<ServiceCost>& current_costs,
   return vbox(std::move(rows));
 }
 
+auto render_tui_budgets_commitments_element(const std::vector<BudgetInfo>& budgets,
+                                            const std::vector<CommitmentRecommendation>& commitments,
+                                            int selected_index) -> ftxui::Element {
+  Elements sections;
+
+  // Section 1: Budgets
+  Elements budget_rows;
+  budget_rows.push_back(
+      hbox({
+          text("Budget Name") | bold | size(WIDTH, EQUAL, 25),
+          text("Budget Limit") | bold | size(WIDTH, EQUAL, 18),
+          text("Current Spend") | bold | size(WIDTH, EQUAL, 18),
+          text("Usage") | bold | size(WIDTH, EQUAL, 25),
+          text("Status") | bold | flex,
+      }) | color(Color::Cyan));
+  budget_rows.push_back(separator());
+
+  if (budgets.empty()) {
+    budget_rows.push_back(text("No consumption budgets found for target subscription.") | dim);
+  } else {
+    for (const auto& b : budgets) {
+      double usage_ratio = b.amount > 0.0 ? (b.current_spend / b.amount) : 0.0;
+      bool exceeded = b.amount > 0.0 && b.current_spend > b.amount;
+      budget_rows.push_back(hbox({
+          text(b.name) | size(WIDTH, EQUAL, 25),
+          text(format_currency_amount(b.amount, b.currency)) | size(WIDTH, EQUAL, 18),
+          text(format_currency_amount(b.current_spend, b.currency)) | size(WIDTH, EQUAL, 18),
+          gauge(static_cast<float>(std::clamp(usage_ratio, 0.0, 1.0))) |
+              color(exceeded ? Color::Red : (usage_ratio > 0.8 ? Color::Yellow : Color::Green)) |
+              size(WIDTH, EQUAL, 25),
+          text("  " + (exceeded ? std::string("EXCEEDED") : std::string("OK"))) | bold |
+              color(exceeded ? Color::Red : Color::Green) | flex,
+      }));
+    }
+  }
+
+  sections.push_back(vbox({
+      text("Azure Consumption Budgets") | bold | color(Color::Cyan),
+      separator(),
+      vbox(std::move(budget_rows)),
+  }));
+
+  sections.push_back(separator());
+
+  // Section 2: Commitments & Reservations
+  Elements commitment_rows;
+  commitment_rows.push_back(
+      hbox({
+          text("Type") | bold | size(WIDTH, EQUAL, 18),
+          text("SKU") | bold | size(WIDTH, EQUAL, 22),
+          text("Region") | bold | size(WIDTH, EQUAL, 16),
+          text("Term") | bold | size(WIDTH, EQUAL, 12),
+          text("Monthly Cost") | bold | size(WIDTH, EQUAL, 18),
+          text("Est. Monthly Savings") | bold | flex,
+      }) | color(Color::Cyan));
+  commitment_rows.push_back(separator());
+
+  if (commitments.empty()) {
+    commitment_rows.push_back(text("No commitment discount recommendations available.") | dim);
+  } else {
+    double total_savings = 0.0;
+    std::string currency = "USD";
+    for (int i = 0; i < static_cast<int>(commitments.size()); ++i) {
+      const auto& c = commitments[i];
+      total_savings += c.estimated_monthly_savings;
+      if (!c.currency.empty()) currency = c.currency;
+
+      auto row = hbox({
+          text(c.type) | size(WIDTH, EQUAL, 18),
+          text(c.sku) | size(WIDTH, EQUAL, 22),
+          text(c.region) | size(WIDTH, EQUAL, 16),
+          text(c.term) | size(WIDTH, EQUAL, 12),
+          text(format_currency_amount(c.estimated_monthly_cost, c.currency)) | size(WIDTH, EQUAL, 18),
+          text(format_currency_amount(c.estimated_monthly_savings, c.currency)) | bold |
+              color(Color::Green) | flex,
+      });
+
+      if (i == selected_index) {
+        row = row | inverted | bold;
+      }
+      commitment_rows.push_back(std::move(row));
+    }
+    commitment_rows.push_back(separator());
+    commitment_rows.push_back(hbox({
+        text("Total Potential Monthly Savings: ") | bold | color(Color::Yellow),
+        text(format_currency_amount(total_savings, currency)) | bold | color(Color::Green),
+    }));
+  }
+
+  sections.push_back(vbox({
+      text("Commitment & Reservation Recommendations") | bold | color(Color::Cyan),
+      separator(),
+      vbox(std::move(commitment_rows)),
+  }) | flex);
+
+  return vbox(std::move(sections));
+}
+
+auto render_tui_compliance_element(const TagComplianceSummary& compliance,
+                                   int selected_index) -> ftxui::Element {
+  if (compliance.total_resources == 0) {
+    return vbox({
+        text("No resource compliance data available.") | dim,
+    });
+  }
+
+  Color comp_color = compliance.compliance_percentage >= 90.0
+                         ? Color::Green
+                         : (compliance.compliance_percentage >= 75.0 ? Color::Yellow : Color::Red);
+
+  std::ostringstream pct_ss;
+  pct_ss << std::fixed << std::setprecision(1) << compliance.compliance_percentage << "%";
+
+  auto kpi_panel = hbox({
+      vbox({
+          text("COMPLIANCE RATE") | bold | dim,
+          text(pct_ss.str()) | bold | color(comp_color),
+          text(std::to_string(compliance.compliant_resources) + " / " +
+               std::to_string(compliance.total_resources) + " compliant") | dim,
+      }) | border | flex,
+      separator(),
+      vbox({
+          text("UNALLOCATED SPEND") | bold | dim,
+          text(format_currency_amount(compliance.unallocated_spend, compliance.currency)) | bold |
+              color(Color::Red),
+          text(std::to_string(compliance.non_compliant_resources) + " untagged resources") | dim,
+      }) | border | flex,
+      separator(),
+      vbox({
+          text("ALLOCATED SPEND") | bold | dim,
+          text(format_currency_amount(compliance.allocated_spend, compliance.currency)) | bold |
+              color(Color::Green),
+          text("Total: " + format_currency_amount(compliance.total_spend, compliance.currency)) | dim,
+      }) | border | flex,
+  });
+
+  Elements missing_tag_rows;
+  missing_tag_rows.push_back(
+      hbox({
+          text("Required Tag") | bold | size(WIDTH, EQUAL, 25),
+          text("Missing Count") | bold | size(WIDTH, EQUAL, 16),
+          text("Spend Impact") | bold | flex,
+      }) | color(Color::Cyan));
+  missing_tag_rows.push_back(separator());
+
+  for (const auto& [tag, count] : compliance.missing_tag_counts) {
+    double cost = 0.0;
+    if (auto it = compliance.missing_tag_costs.find(tag); it != compliance.missing_tag_costs.end()) {
+      cost = it->second;
+    }
+    missing_tag_rows.push_back(hbox({
+        text(tag) | size(WIDTH, EQUAL, 25),
+        text(std::to_string(count)) | size(WIDTH, EQUAL, 16),
+        text(format_currency_amount(cost, compliance.currency)) | color(Color::Red) | flex,
+    }));
+  }
+
+  Elements item_rows;
+  item_rows.push_back(
+      hbox({
+          text("Resource") | bold | size(WIDTH, EQUAL, 26),
+          text("Resource Group") | bold | size(WIDTH, EQUAL, 20),
+          text("Type") | bold | size(WIDTH, EQUAL, 28),
+          text("Cost") | bold | size(WIDTH, EQUAL, 16),
+          text("Missing Tags") | bold | flex,
+      }) | color(Color::Cyan));
+  item_rows.push_back(separator());
+
+  if (compliance.non_compliant_items.empty()) {
+    item_rows.push_back(text("All resources are fully compliant with required tags!") | color(Color::Green) | bold);
+  } else {
+    for (int i = 0; i < static_cast<int>(compliance.non_compliant_items.size()); ++i) {
+      const auto& item = compliance.non_compliant_items[i];
+      std::string missing_str;
+      for (std::size_t j = 0; j < item.missing_tags.size(); ++j) {
+        if (j > 0) missing_str += ", ";
+        missing_str += item.missing_tags[j];
+      }
+      auto row = hbox({
+          text(item.resource_name) | size(WIDTH, EQUAL, 26),
+          text(item.resource_group) | size(WIDTH, EQUAL, 20),
+          text(item.resource_type) | size(WIDTH, EQUAL, 28),
+          text(format_currency_amount(item.cost, item.currency)) | size(WIDTH, EQUAL, 16),
+          text(missing_str) | color(Color::Red) | flex,
+      });
+      if (i == selected_index) {
+        row = row | inverted | bold;
+      }
+      item_rows.push_back(std::move(row));
+    }
+  }
+
+  return vbox({
+      kpi_panel,
+      separator(),
+      hbox({
+          vbox({
+              text("Missing Tags Breakdown") | bold | color(Color::Cyan),
+              separator(),
+              vbox(std::move(missing_tag_rows)),
+          }) | size(WIDTH, EQUAL, 50),
+          separator(),
+          vbox({
+              text("Non-Compliant Resources (" + std::to_string(compliance.non_compliant_items.size()) + ")") |
+                  bold | color(Color::Cyan),
+              separator(),
+              vbox(std::move(item_rows)) | flex,
+          }) | flex,
+      }) | flex,
+  });
+}
+
 auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
   auto screen = ScreenInteractive::Fullscreen();
 
@@ -195,6 +407,9 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
   std::vector<ServiceCost> current_costs;
   std::vector<MonthCost> trends;
   std::vector<WasteFinding> waste;
+  std::vector<BudgetInfo> budgets;
+  std::vector<CommitmentRecommendation> commitments;
+  TagComplianceSummary compliance;
   std::string active_currency = "USD";
 
   int tab_index = 0;
@@ -202,12 +417,16 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
       "1. Cost Drilldown",
       "2. 6-Month Trends",
       "3. Waste Findings",
-      "4. Account & Aliases",
+      "4. Budgets & Commitments",
+      "5. Tag Governance",
+      "6. Account & Aliases",
   };
   auto tab_menu = Menu(&tab_entries, &tab_index);
 
   int cost_selected = 0;
   int waste_selected = 0;
+  int commitment_selected = 0;
+  int compliance_selected = 0;
 
   // Background data fetcher
   auto fetch_data = [&]() {
@@ -216,9 +435,20 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
       current_costs = runtime.cost_provider.current_month_costs(options);
       trends = runtime.trend_provider.six_month_trends(options);
       waste = runtime.waste_provider.waste_findings(options);
+      if (runtime.budget_provider) {
+        budgets = runtime.budget_provider->budgets(options);
+      }
+      if (runtime.commitment_provider) {
+        commitments = runtime.commitment_provider->commitment_recommendations(options);
+      }
+      if (runtime.compliance_provider) {
+        compliance = runtime.compliance_provider->tag_compliance(options);
+      }
 
       if (!current_costs.empty()) {
         active_currency = current_costs.front().currency;
+      } else if (!compliance.currency.empty()) {
+        active_currency = compliance.currency;
       }
       status = "Ready";
       loaded = true;
@@ -288,6 +518,12 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
           content = render_tui_waste_element(waste, waste_selected);
           break;
         case 3:
+          content = render_tui_budgets_commitments_element(budgets, commitments, commitment_selected);
+          break;
+        case 4:
+          content = render_tui_compliance_element(compliance, compliance_selected);
+          break;
+        case 5:
         default:
           content = render_account_tab();
           break;
@@ -308,7 +544,7 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
         content | flex,
         separator(),
         hbox({
-            text("Tab / 1-4: Switch Tabs | Up/Down: Navigate | r: Reload | q: Quit") | dim,
+            text("Tab / 1-6: Switch Tabs | Up/Down: Navigate | r: Reload | q: Quit") | dim,
         }),
     }) | border;
   });
@@ -334,6 +570,14 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
       tab_index = 3;
       return true;
     }
+    if (event == Event::Character('5')) {
+      tab_index = 4;
+      return true;
+    }
+    if (event == Event::Character('6')) {
+      tab_index = 5;
+      return true;
+    }
     if (event == Event::ArrowUp) {
       if (tab_index == 0 && cost_selected > 0) {
         --cost_selected;
@@ -341,6 +585,14 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
       }
       if (tab_index == 2 && waste_selected > 0) {
         --waste_selected;
+        return true;
+      }
+      if (tab_index == 3 && commitment_selected > 0) {
+        --commitment_selected;
+        return true;
+      }
+      if (tab_index == 4 && compliance_selected > 0) {
+        --compliance_selected;
         return true;
       }
     }
@@ -351,6 +603,14 @@ auto run_tui(const CliOptions& options, const CliRuntime& runtime) -> int {
       }
       if (tab_index == 2 && waste_selected + 1 < static_cast<int>(waste.size())) {
         ++waste_selected;
+        return true;
+      }
+      if (tab_index == 3 && commitment_selected + 1 < static_cast<int>(commitments.size())) {
+        ++commitment_selected;
+        return true;
+      }
+      if (tab_index == 4 && compliance_selected + 1 < static_cast<int>(compliance.non_compliant_items.size())) {
+        ++compliance_selected;
         return true;
       }
     }

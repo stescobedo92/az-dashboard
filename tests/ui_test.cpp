@@ -89,4 +89,57 @@ TEST(CliParserUiTest, ParsesUiCommand) {
   EXPECT_EQ(options.command, azdash::CommandKind::UI);
 }
 
+TEST(TuiBudgetsCommitmentsElementTest, RendersBudgetsAndCommitments) {
+  const std::vector<azdash::BudgetInfo> budgets = {
+      {.name = "Dev-Budget", .amount = 500.0, .current_spend = 250.0, .time_grain = "Monthly", .currency = "USD"},
+      {.name = "Prod-Budget", .amount = 1000.0, .current_spend = 1200.0, .time_grain = "Monthly", .currency = "USD"},
+  };
+  const std::vector<azdash::CommitmentRecommendation> commitments = {
+      {.id = "c1", .type = "ReservedInstance", .sku = "Standard_D8s_v5", .region = "eastus", .term = "3 Years",
+       .estimated_monthly_savings = 150.0, .estimated_monthly_cost = 200.0, .currency = "USD", .details = "3yr RI"},
+  };
+
+  const auto element = azdash::render_tui_budgets_commitments_element(budgets, commitments, 0);
+  const auto output = render_to_string(element);
+
+  EXPECT_TRUE(output.find("Dev-Budget") != std::string::npos);
+  EXPECT_TRUE(output.find("500.00 USD") != std::string::npos);
+  EXPECT_TRUE(output.find("Prod-Budget") != std::string::npos);
+  EXPECT_TRUE(output.find("EXCEEDED") != std::string::npos);
+  EXPECT_TRUE(output.find("ReservedInstance") != std::string::npos);
+  EXPECT_TRUE(output.find("Standard_D8s_v5") != std::string::npos);
+  EXPECT_TRUE(output.find("150.00 USD") != std::string::npos);
+}
+
+TEST(TuiComplianceElementTest, RendersComplianceKPICardsAndMissingTags) {
+  azdash::TagComplianceSummary compliance;
+  compliance.total_resources = 10;
+  compliance.compliant_resources = 8;
+  compliance.non_compliant_resources = 2;
+  compliance.compliance_percentage = 80.0;
+  compliance.total_spend = 1000.0;
+  compliance.allocated_spend = 800.0;
+  compliance.unallocated_spend = 200.0;
+  compliance.currency = "USD";
+  compliance.missing_tag_counts["Environment"] = 2;
+  compliance.missing_tag_costs["Environment"] = 200.0;
+  compliance.non_compliant_items.push_back({
+      .resource_name = "vm-untagged",
+      .resource_group = "rg-core",
+      .resource_type = "Microsoft.Compute/virtualMachines",
+      .cost = 200.0,
+      .currency = "USD",
+      .missing_tags = {"Environment"},
+  });
+
+  const auto element = azdash::render_tui_compliance_element(compliance, 0);
+  const auto output = render_to_string(element);
+
+  EXPECT_TRUE(output.find("80.0%") != std::string::npos);
+  EXPECT_TRUE(output.find("200.00 USD") != std::string::npos);
+  EXPECT_TRUE(output.find("800.00 USD") != std::string::npos);
+  EXPECT_TRUE(output.find("Environment") != std::string::npos);
+  EXPECT_TRUE(output.find("vm-untagged") != std::string::npos);
+}
+
 } // namespace

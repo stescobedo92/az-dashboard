@@ -5,6 +5,8 @@
 #include "az_dashboard/render.hpp"
 #include "az_dashboard/webhook.hpp"
 
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -492,6 +494,107 @@ TEST(ComplianceTest, WebhookDispatchesComplianceAlert) {
   EXPECT_EQ(webhook_sender.urls.front(), options.webhook_url);
   EXPECT_EQ(webhook_sender.payloads.front().status, "danger");
   EXPECT_NE(webhook_sender.payloads.front().message.find("50.0%"), std::string::npos);
+}
+
+TEST(ComplianceTest, GeneratesRemediationScriptForNonCompliantResources) {
+  azdash::TagComplianceSummary summary;
+  summary.total_resources = 1;
+  summary.compliant_resources = 0;
+  summary.non_compliant_resources = 1;
+  summary.compliance_percentage = 0.0;
+  summary.non_compliant_items.push_back({
+      .resource_name = "vm-untagged",
+      .resource_group = "rg-dev",
+      .resource_type = "Microsoft.Compute/virtualMachines",
+      .cost = 120.0,
+      .currency = "USD",
+      .missing_tags = {"Environment", "Owner"},
+      .tags = {{"Project", "Phoenix"}},
+  });
+
+  FakeComplianceProvider compliance_provider{summary};
+  FakeAccountProvider account_provider;
+  FakeCostProvider cost_provider;
+  FakeTrendProvider trend_provider;
+  FakeWasteProvider waste_provider;
+  FakeReportWriter report_writer;
+  FakeSubscriptionAliasStore alias_store;
+  FakeCostHistoryStore history_store;
+
+  std::ostringstream out;
+  std::ostringstream err;
+  azdash::CliRuntime runtime{
+      out, err, account_provider, cost_provider, trend_provider, waste_provider,
+      report_writer, alias_store, history_store, nullptr, nullptr, nullptr,
+      nullptr, nullptr, &compliance_provider,
+  };
+
+  const auto script_path = std::filesystem::temp_directory_path() / "test_tag_remediation.sh";
+  if (std::filesystem::exists(script_path)) {
+    std::filesystem::remove(script_path);
+  }
+
+  azdash::CliOptions options;
+  options.command = azdash::CommandKind::Compliance;
+  options.remediation_path = script_path.string();
+
+  const int code = azdash::run(options, runtime);
+  EXPECT_EQ(code, 0);
+
+  std::string content;
+  {
+    std::ifstream in(script_path);
+    content.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  }
+  EXPECT_NE(content.find("az resource tag --name \"vm-untagged\""), std::string::npos);
+  EXPECT_NE(content.find("\"Environment=unassigned\""), std::string::npos);
+  EXPECT_NE(content.find("\"Owner=unassigned\""), std::string::npos);
+  EXPECT_NE(content.find("\"Project=Phoenix\""), std::string::npos);
+
+  std::error_code ec;
+  std::filesystem::remove(script_path, ec);
+}
+
+TEST(ComplianceTest, DryRunSkipsRemediationScriptCreation) {
+  azdash::TagComplianceSummary summary;
+  summary.total_resources = 1;
+  summary.non_compliant_resources = 1;
+  summary.non_compliant_items.push_back({
+      .resource_name = "vm-untagged",
+      .missing_tags = {"Environment"},
+  });
+
+  FakeComplianceProvider compliance_provider{summary};
+  FakeAccountProvider account_provider;
+  FakeCostProvider cost_provider;
+  FakeTrendProvider trend_provider;
+  FakeWasteProvider waste_provider;
+  FakeReportWriter report_writer;
+  FakeSubscriptionAliasStore alias_store;
+  FakeCostHistoryStore history_store;
+
+  std::ostringstream out;
+  std::ostringstream err;
+  azdash::CliRuntime runtime{
+      out, err, account_provider, cost_provider, trend_provider, waste_provider,
+      report_writer, alias_store, history_store, nullptr, nullptr, nullptr,
+      nullptr, nullptr, &compliance_provider,
+  };
+
+  const auto script_path = std::filesystem::temp_directory_path() / "test_tag_remediation_dryrun.sh";
+  if (std::filesystem::exists(script_path)) {
+    std::filesystem::remove(script_path);
+  }
+
+  azdash::CliOptions options;
+  options.command = azdash::CommandKind::Compliance;
+  options.remediation_path = script_path.string();
+  options.dry_run = true;
+
+  const int code = azdash::run(options, runtime);
+  EXPECT_EQ(code, 0);
+  EXPECT_FALSE(std::filesystem::exists(script_path));
+  EXPECT_NE(out.str().find("Dry Run Complete"), std::string::npos);
 }
 
 } // namespace

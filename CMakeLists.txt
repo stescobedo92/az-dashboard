@@ -47,6 +47,7 @@ add_library(az_dashboard_lib STATIC
   src/cache.cpp
   src/cli.cpp
   src/cli_parser.cpp
+  src/config.cpp
   src/history.cpp
   src/process_runner.cpp
   src/render.cpp
@@ -134,6 +135,7 @@ if(AZ_DASHBOARD_BUILD_TESTS)
     tests/cli_test.cpp
     tests/commitments_test.cpp
     tests/compliance_test.cpp
+    tests/config_test.cpp
     tests/concurrency_test.cpp
     tests/history_test.cpp
     tests/process_runner_test.cpp

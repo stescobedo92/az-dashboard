@@ -4,6 +4,7 @@
 #include "az_dashboard/azure_cli.hpp"
 #include "az_dashboard/azure_rest.hpp"
 #include "az_dashboard/cache.hpp"
+#include "az_dashboard/config.hpp"
 #include "az_dashboard/history.hpp"
 #include "az_dashboard/render.hpp"
 #include "az_dashboard/report.hpp"
@@ -642,6 +643,39 @@ auto execute_compliance(const CliOptions& options, const CliRuntime& runtime) ->
     }
   }
 
+  if (options.dry_run && !options.remediation_path.empty()) {
+    std::ostringstream msg;
+    msg << "Dry run: " << summary.non_compliant_items.size()
+        << " non-compliant resources identified. Remediation script generation to "
+        << options.remediation_path << " skipped.";
+    render_success("Dry Run Complete", msg.str(), runtime.out);
+  } else if (!options.remediation_path.empty()) {
+    const std::filesystem::path rem_path(options.remediation_path);
+    if (!rem_path.parent_path().empty()) {
+      std::filesystem::create_directories(rem_path.parent_path());
+    }
+    std::ofstream out(rem_path);
+    out << "#!/bin/bash\n";
+    out << "# azdash automated tag compliance remediation script\n";
+    out << "# Generated on: " << current_utc_timestamp() << "\n\n";
+    out << "set -euo pipefail\n\n";
+    for (const auto& item : summary.non_compliant_items) {
+      if (item.missing_tags.empty()) continue;
+      out << "# Resource: " << item.resource_name << " (" << item.resource_type << ") in " << item.resource_group << "\n";
+      out << "az resource tag --name \"" << item.resource_name << "\" --resource-group \"" << item.resource_group
+          << "\" --resource-type \"" << item.resource_type << "\" --tags";
+      for (const auto& [k, v] : item.tags) {
+        out << " \"" << k << "=" << v << "\"";
+      }
+      for (const auto& mt : item.missing_tags) {
+        out << " \"" << mt << "=unassigned\"";
+      }
+      out << "\n\n";
+    }
+    render_success("Remediation Script Generated",
+                   "Tag remediation script written to " + rem_path.string(), runtime.out);
+  }
+
   if (options.min_compliance_percent > 0.0 && summary.compliance_percentage < options.min_compliance_percent) {
     runtime.err << "error: tag compliance " << std::fixed << std::setprecision(1) << summary.compliance_percentage
                 << "% is below required minimum threshold " << options.min_compliance_percent << "%\n";
@@ -746,7 +780,11 @@ private:
 } // namespace
 
 auto run(const CliOptions& options) -> int {
-  auto provider = AzureCliRuntimeProvider(options);
+  CliOptions effective_options = options;
+  const auto config = load_app_config(options.config_path);
+  apply_config_defaults(effective_options, config);
+
+  auto provider = AzureCliRuntimeProvider(effective_options);
   auto report_writer = PdfReportWriter();
   auto alias_store = LocalSubscriptionAliasStore();
   auto history_store = LocalCostHistoryStore();
@@ -755,12 +793,15 @@ auto run(const CliOptions& options) -> int {
   auto runtime = CliRuntime{std::cout, std::cerr,     provider,     provider,
                             provider,  provider,      report_writer, alias_store,
                             history_store, &webhook_sender, &std::cin, &runner, &provider, &provider, &provider};
-  return run(options, runtime);
+  return run(effective_options, runtime);
 }
 
 auto run(const CliOptions& options, const CliRuntime& runtime) -> int {
   try {
-    return CommandDispatcher(runtime).execute(options);
+    CliOptions effective_options = options;
+    const auto config = load_app_config(options.config_path);
+    apply_config_defaults(effective_options, config);
+    return CommandDispatcher(runtime).execute(effective_options);
   } catch (const std::exception& error) {
     render_error(error.what(), runtime.err);
     return 1;

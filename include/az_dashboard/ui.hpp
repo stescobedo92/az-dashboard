@@ -30,6 +30,19 @@ namespace azdash {
                                            int selected_index) -> ftxui::Element;
 
 /**
+ * @brief Renders the visual representation of budgets and commitment recommendations for the TUI.
+ */
+[[nodiscard]] auto render_tui_budgets_commitments_element(const std::vector<BudgetInfo>& budgets,
+                                                          const std::vector<CommitmentRecommendation>& commitments,
+                                                          int selected_index) -> ftxui::Element;
+
+/**
+ * @brief Renders the visual representation of tag compliance governance for the TUI.
+ */
+[[nodiscard]] auto render_tui_compliance_element(const TagComplianceSummary& compliance,
+                                                 int selected_index) -> ftxui::Element;
+
+/**
  * @brief Launches the interactive FTXUI full-screen terminal dashboard.
  * @param options Parsed command options.
  * @param runtime CLI dependency bundle.

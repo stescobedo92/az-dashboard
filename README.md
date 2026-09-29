@@ -37,8 +37,10 @@ The implementation is intentionally layered:
 - **Remediation Script Generator (`--generate-remediation <path>`)**: Automatically output executable bash scripts for remediating identified waste.
 - **Extended FinOps Waste Heuristics**: Detects orphan NSGs, unused Route Tables, idle NAT Gateways ($32.40/mo savings), empty App Service Plans, unattached disks, orphan public IPs, and stopped VMs.
 - **Advanced Multi-Tag Filtering (`--filter-tag`)**: Filter resources with syntax supporting exact matches (`k=v`), multi-value OR (`k=v1,v2`), negation (`k!=v`), existence (`k`), and absence (`!k`).
-- **Tag Compliance Governance (`azdash compliance`)**: Audit Azure resources against required tags (`--required-tags`), measure unallocated untagged spend, and enforce CI/CD compliance gates (`--min-compliance <pct>`).
+- **Tag Compliance Governance (`azdash compliance`)**: Audit Azure resources against required tags (`--required-tags`), measure unallocated untagged spend, generate auto-tag remediation scripts (`--generate-remediation`), and enforce CI/CD compliance gates (`--min-compliance <pct>`).
 - **Responsive HTML Reports (`-o html`)**: Generate modern, standalone executive HTML dashboards for costs, trends, waste, budgets, commitments, and compliance.
+- **6-Tab Interactive TUI Dashboard (`azdash ui`)**: Full-screen terminal dashboard covering Cost Drilldown, 6-Month Trends, Waste Findings, Budgets & Commitments, Tag Governance, and Account & Aliases.
+- **Persistent Configuration (`.azdashrc` / `azdash.json` / `--config`)**: Automatic configuration discovery from local directory or `~/.azdash/config.json` with CLI flag override precedence.
 - **Server-Side JMESPath Projection (`--fast`)**: Trim 80-90% of payload bandwidth by projecting fields directly within Azure CLI queries.
 - **Local Trend Caching (`--no-cache` to bypass)**: Cache finalized historical billing months in local storage with atomic writes for instant trend reports.
 - **Webhook Alerts (`--webhook <url>`)**: Automatic notifications with severity coloring dispatched to Slack, Microsoft Teams (MessageCards), or generic JSON endpoints.
@@ -195,6 +197,10 @@ azdash ri --term 3yr --min-savings 100
 azdash compliance
 azdash compliance --required-tags "Environment,Owner,CostCenter,Application"
 azdash --min-compliance 85.0 compliance  # Return exit code 2 if compliance < 85%
+azdash --generate-remediation ./fix_tags.sh compliance  # Output az resource tag script
+
+# Load configuration defaults (.azdashrc, azdash.json, or custom path)
+azdash --config ./finops-team.json cost
 
 # Generate executive responsive HTML dashboards
 azdash -o html cost > cost_report.html

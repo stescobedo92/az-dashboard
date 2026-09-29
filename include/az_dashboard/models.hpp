@@ -113,6 +113,7 @@ struct CliOptions {
   bool use_rest{false};
   std::vector<std::string> required_tags;
   double min_compliance_percent{0.0};
+  std::string config_path;
 };
 
 // Azure analysis domain models.

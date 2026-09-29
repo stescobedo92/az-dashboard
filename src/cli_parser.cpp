@@ -176,6 +176,8 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     }
   } else if (token == "--min-compliance" || token == "--min-compliance-percent") {
     options.min_compliance_percent = parse_double(args, index, token);
+  } else if (token == "--config") {
+    options.config_path = require_value(args, index, token);
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -407,6 +409,7 @@ Global flags:
   --fast                              Use server-side JMESPath query projection to minimize payload size.
   --dry-run                           Simulate execution without modifying or creating resources.
   --webhook, --webhook-url <url>      Send alert notification payload to Slack, Teams, or generic webhook URL.
+  --config <path>                     Load configuration defaults from a custom config file.
 
 Waste checks:
   advisor compute network storage appservice database containers keyvault
