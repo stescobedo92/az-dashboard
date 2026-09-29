@@ -14,40 +14,36 @@ report.
 
 The implementation is intentionally layered:
 
-- `AzureCliClient` gathers data through the official Azure CLI, so the core is
-  easy to test without Azure credentials.
-- `analytics` contains template-based generic helpers with concepts for
-  aggregation and filtering.
-- `render` owns FTXUI, JSON, and CSV presentation.
-- `report` writes stakeholder-friendly PDF reports without requiring a browser.
-- GTest covers parser, analytics, and report generation behavior.
+- `IAzureClient` abstracts Azure data providers, allowing interchangeable backends:
+  - `AzureCliClient` gathers data through the official Azure CLI.
+  - `AzureRestClient` communicates directly with Azure ARM REST APIs (`management.azure.com`) via OAuth2 client credentials without requiring the Azure CLI or Python.
+- `analytics` contains template-based generic helpers with concepts for aggregation, multi-tag filtering, anomaly detection, and Bayesian shrinkage projections.
+- `cache` persists closed historical months locally with atomic writes to speed up repeat runs.
+- `ui` provides a terminal user interface (TUI) powered by FTXUI with 4 tabs, drilldown, and sparklines.
+- `webhook` sends structured alert notifications to Slack, Microsoft Teams, and generic JSON endpoints.
+- `cli_parser` encapsulates CLI grammar, validation, and help formatting.
+- `render` owns FTXUI, JSON, CSV, and Markdown presentation.
+- `report` writes multi-page stakeholder-friendly PDF reports with headers and page numbering.
+- GTest covers all modules with 166 comprehensive unit tests.
 
 ## Features
 
-- `link-account` verifies connectivity to the Azure CLI you signed in with and
-  prints the active subscription, tenant, and user.
-- Comparative cost analytics for current month versus the matching window in
-  the previous month, plus a projected end-of-month total.
-- Cost aggregation by service (default) or by resource group with
-  `--group-by resource-group`.
-- Six-month trend report with optional service filtering.
-- Statistical cost anomaly detection: `azdash anomaly` scores the projected
-  current month against the six-month baseline using a z-score.
-- Local cost history: every `azdash cost` run records a snapshot under the user
-  config directory, and `azdash history` lists past runs offline.
-- Waste detection from `az advisor recommendation list --category Cost`.
-- Extra Azure heuristics for unattached managed disks, orphan public IPs, old
-  snapshots, and stopped or deallocated virtual machines.
-- Selective scans by check name, for example `compute network advisor`.
-- Local subscription aliases through `alias-sub` so long subscription IDs can be
-  referenced by short names in later commands.
-- Output formats: `table`, `json`, `csv`, and `markdown` (PR-comment friendly).
-- Styled terminal tables with colors and inline progress bars for table output.
-- PDF reports for cost, trend, and waste workflows.
-- A reusable GitHub Action that posts the Markdown cost report on pull
-  requests, with an optional cost gate.
-- CMake, vcpkg manifest mode, Docker, CI build/test, and package publishing
-  workflows for Homebrew, npm, winget, vcpkg, and release-native installers.
+- **Interactive TUI Dashboard (`azdash ui`)**: Terminal GUI with 4 navigable tabs (`Cost Overview`, `6-Month Trends`, `Waste Findings`, `Account`), live sparklines, and detailed finding inspectors.
+- **Direct Azure REST Client (`--rest`)**: Standalone mode using OAuth2 Service Principal credentials (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`) without needing Python or the Azure CLI.
+- **Enterprise Budgets (`azdash budget`)**: Track consumption budgets against current spend with visual progress bars and exceeded indicators.
+- **Commitments & Reservations Analysis (`azdash commitments` / `ri`)**: Compute Savings Plans and Reserved Instances (1-year / 3-year) recommendations with potential monthly savings calculations.
+- **Management Groups Hierarchy (`--management-group` / `--mg`)**: Recursively query and aggregate costs across all subscriptions under an Azure Management Group.
+- **Interactive Waste Remediation (`-i` / `--interactive`)**: Step-by-step interactive prompt to inspect and safely apply cleanup actions with full `--dry-run` simulation support.
+- **Remediation Script Generator (`--generate-remediation <path>`)**: Automatically output executable bash scripts for remediating identified waste.
+- **Extended FinOps Waste Heuristics**: Detects orphan NSGs, unused Route Tables, idle NAT Gateways ($32.40/mo savings), empty App Service Plans, unattached disks, orphan public IPs, and stopped VMs.
+- **Advanced Multi-Tag Filtering (`--filter-tag`)**: Filter resources with syntax supporting exact matches (`k=v`), multi-value OR (`k=v1,v2`), negation (`k!=v`), existence (`k`), and absence (`!k`).
+- **Server-Side JMESPath Projection (`--fast`)**: Trim 80-90% of payload bandwidth by projecting fields directly within Azure CLI queries.
+- **Local Trend Caching (`--no-cache` to bypass)**: Cache finalized historical billing months in local storage with atomic writes for instant trend reports.
+- **Webhook Alerts (`--webhook <url>`)**: Automatic notifications with severity coloring dispatched to Slack, Microsoft Teams (MessageCards), or generic JSON endpoints.
+- **Bayesian Weighted Cost Projections (`--projection weighted`)**: Shrinkage model accounting for end-of-month acceleration and historical spending patterns.
+- **Multi-Currency Propagation**: Native detection of Azure `billingCurrency` across all views, tables, JSON exports, and PDF reports.
+- **Multi-page PDF Reports**: Dynamically paginated PDF reports with repeating table headers and `Page X of Y` footers.
+- **Local Subscription Aliases (`alias-sub`)**: Map long subscription GUIDs to friendly short names.
 
 ## Install
 
@@ -161,14 +157,40 @@ docker run --rm -it -v "$HOME/.azure:/home/azdash/.azure:ro" azdash cost
 ## Usage
 
 ```bash
+# Launch the interactive terminal UI (FTXUI 4-tab dashboard)
+azdash ui
+
 # Confirm azdash can reach the account you authenticated with `az login`
 azdash link-account
 
 # Cost comparison: current month vs previous matching window
 azdash cost
 
+# Use Bayesian weighted projection instead of linear
+azdash --projection weighted cost
+
+# Direct Azure REST API mode (without Azure CLI, using OAuth2 SP credentials)
+azdash --rest cost
+
+# Filter costs by Azure tag expressions (e.g. Env=Prod or multi-value)
+azdash --filter-tag "Environment=Production" cost
+
+# Target an entire Azure Management Group recursively
+azdash --management-group "mg-enterprise" cost
+
 # Cost breakdown by resource group instead of service
 azdash --group-by resource-group cost
+
+# Track consumption budgets and threshold progress
+azdash budget
+azdash --budget "Q3-Production" budget
+
+# Commitments analysis (Compute Savings Plans and Reserved Instances)
+azdash commitments
+azdash ri --term 3yr --min-savings 100
+
+# Send Slack / Teams alert notifications upon budget overrun or anomalies
+azdash --webhook "https://hooks.slack.com/services/..." --fail-if-exceeds 1000 cost
 
 # JSON, CSV, or Markdown output
 azdash --output json cost
@@ -177,6 +199,12 @@ azdash --output markdown cost
 
 # Statistical anomaly check against the six-month baseline
 azdash anomaly
+
+# Interactive waste remediation with confirmation prompt
+azdash -i waste
+
+# Generate automated cleanup script with dry-run simulation
+azdash --dry-run --generate-remediation ./cleanup.sh waste
 
 # Locally recorded snapshots of past cost runs
 azdash history
@@ -190,8 +218,8 @@ azdash alias-sub list
 # Use a specific subscription directly
 azdash --subscription "00000000-0000-0000-0000-000000000000" trend
 
-# Trend for selected services
-azdash trend "Virtual Machines" "Storage"
+# Fast server-side projection to reduce Azure CLI bandwidth
+azdash --fast trend "Virtual Machines" "Storage"
 
 # Waste checks
 azdash waste
