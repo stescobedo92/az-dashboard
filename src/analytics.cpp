@@ -1,5 +1,11 @@
 #include "az_dashboard/analytics.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 namespace azdash {
 
 auto compare_costs(const std::vector<ServiceCost>& current,
