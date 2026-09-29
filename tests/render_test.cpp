@@ -197,4 +197,30 @@ TEST(RenderTest, HistoryMarkdownRendersSnapshots) {
             "| 2026-07-01T10:00:00Z | sub-1 | 10.00 |\n");
 }
 
+TEST(RenderTest, CostHtmlRendersValidHtmlDocument) {
+  std::ostringstream out;
+
+  azdash::render_costs({{.service = "Virtual Machines", .previous = 100.0, .current = 150.0, .delta = 50.0, .delta_percent = 50.0}},
+                       200.0, azdash::OutputFormat::Html, out);
+
+  const std::string html = out.str();
+  EXPECT_NE(html.find("<!DOCTYPE html>"), std::string::npos);
+  EXPECT_NE(html.find("<title>azdash Report</title>"), std::string::npos);
+  EXPECT_NE(html.find("<th>Service</th>"), std::string::npos);
+  EXPECT_NE(html.find("<td>Virtual Machines</td>"), std::string::npos);
+  EXPECT_NE(html.find("150.00"), std::string::npos);
+}
+
+TEST(RenderTest, TrendHtmlRendersValidHtmlDocument) {
+  std::ostringstream out;
+
+  azdash::render_trends({{.month = "2026-06", .total = 250.0}}, azdash::OutputFormat::Html, out);
+
+  const std::string html = out.str();
+  EXPECT_NE(html.find("<!DOCTYPE html>"), std::string::npos);
+  EXPECT_NE(html.find("<th>Month</th>"), std::string::npos);
+  EXPECT_NE(html.find("<td>2026-06</td>"), std::string::npos);
+  EXPECT_NE(html.find("250.00"), std::string::npos);
+}
+
 } // namespace

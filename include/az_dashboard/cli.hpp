@@ -75,6 +75,16 @@ public:
 };
 
 /**
+ * @brief Tag compliance and governance provider required by compliance workflows.
+ */
+class ICliComplianceProvider {
+public:
+  virtual ~ICliComplianceProvider() = default;
+
+  [[nodiscard]] virtual auto tag_compliance(const CliOptions& options) const -> TagComplianceSummary = 0;
+};
+
+/**
  * @brief Report sink required by PDF report workflows.
  */
 class ICliReportWriter {
@@ -128,7 +138,8 @@ class AzureClientAdapter : public ICliAccountProvider,
                            public ICliTrendProvider,
                            public ICliWasteProvider,
                            public ICliBudgetProvider,
-                           public ICliCommitmentProvider {
+                           public ICliCommitmentProvider,
+                           public ICliComplianceProvider {
 public:
   explicit AzureClientAdapter(std::shared_ptr<IAzureClient> client) : client_(std::move(client)) {}
 
@@ -161,6 +172,10 @@ public:
     return client_->commitment_recommendations(options);
   }
 
+  [[nodiscard]] auto tag_compliance(const CliOptions& options) const -> TagComplianceSummary override {
+    return client_->tag_compliance(options);
+  }
+
 private:
   std::shared_ptr<IAzureClient> client_;
 };
@@ -183,6 +198,7 @@ struct CliRuntime {
   const ICommandRunner* runner{nullptr};
   const ICliBudgetProvider* budget_provider{nullptr};
   const ICliCommitmentProvider* commitment_provider{nullptr};
+  const ICliComplianceProvider* compliance_provider{nullptr};
 };
 
 /**

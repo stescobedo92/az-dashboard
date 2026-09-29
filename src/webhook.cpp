@@ -1,7 +1,9 @@
 #include "az_dashboard/webhook.hpp"
 #include "az_dashboard/azure_cli.hpp"
 
+#include <iomanip>
 #include <nlohmann/json.hpp>
+#include <sstream>
 
 namespace azdash {
 
@@ -67,6 +69,47 @@ auto format_generic_payload(const WebhookPayload& payload) -> std::string {
   root["message"] = payload.message;
   root["details"] = payload.details;
   return root.dump(2);
+}
+
+auto make_compliance_webhook_payload(const TagComplianceSummary& summary,
+                                     const CliOptions& options) -> WebhookPayload {
+  std::string status = "info";
+  if (options.min_compliance_percent > 0.0 && summary.compliance_percentage < options.min_compliance_percent) {
+    status = "danger";
+  } else if (summary.compliance_percentage < 85.0) {
+    status = "warning";
+  }
+
+  std::ostringstream msg;
+  msg << std::fixed << std::setprecision(1);
+  msg << "Tag compliance is at " << summary.compliance_percentage << "% (" << summary.compliant_resources
+      << "/" << summary.total_resources << " resources compliant). Unallocated spend: "
+      << std::fixed << std::setprecision(2) << summary.unallocated_spend << " " << summary.currency;
+
+  std::ostringstream details;
+  details << "Missing tags: ";
+  bool first = true;
+  for (const auto& [tag, count] : summary.missing_tag_counts) {
+    if (!first) details << ", ";
+    details << tag << " (" << count << " missing)";
+    first = false;
+  }
+
+  std::string sub_label = "All subscriptions";
+  if (!options.subscriptions.empty()) {
+    sub_label = options.subscriptions.front();
+    if (options.subscriptions.size() > 1) {
+      sub_label += " (+" + std::to_string(options.subscriptions.size() - 1) + " more)";
+    }
+  }
+
+  return WebhookPayload{
+      .title = "Azure Tag Compliance Alert",
+      .status = std::move(status),
+      .subscription = std::move(sub_label),
+      .message = msg.str(),
+      .details = details.str(),
+  };
 }
 
 DefaultWebhookSender::DefaultWebhookSender()

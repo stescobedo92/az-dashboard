@@ -19,6 +19,9 @@ auto parse_output(const std::string& value) -> OutputFormat {
   if (value == "markdown" || value == "md") {
     return OutputFormat::Markdown;
   }
+  if (value == "html") {
+    return OutputFormat::Html;
+  }
   if (value == "table") {
     return OutputFormat::Table;
   }
@@ -153,6 +156,26 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.min_savings = parse_double(args, index, token);
   } else if (token == "--rest" || token == "--use-rest") {
     options.use_rest = true;
+  } else if (token == "--required-tags" || token == "--required-tag") {
+    const auto raw = require_value(args, index, token);
+    std::string_view sv = raw;
+    while (!sv.empty()) {
+      auto pos = sv.find(',');
+      auto part = sv.substr(0, pos);
+      while (!part.empty() && (part.front() == ' ' || part.front() == '\t')) {
+        part.remove_prefix(1);
+      }
+      while (!part.empty() && (part.back() == ' ' || part.back() == '\t')) {
+        part.remove_suffix(1);
+      }
+      if (!part.empty()) {
+        options.required_tags.emplace_back(part);
+      }
+      if (pos == std::string_view::npos) break;
+      sv.remove_prefix(pos + 1);
+    }
+  } else if (token == "--min-compliance" || token == "--min-compliance-percent") {
+    options.min_compliance_percent = parse_double(args, index, token);
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -286,6 +309,9 @@ void parse_command(CliOptions& options, std::span<const std::string> args, std::
   } else if (command == "commitments" || command == "commitment" || command == "ri" || command == "reservations") {
     options.command = CommandKind::Commitments;
     collect_selectors(options, args, index);
+  } else if (command == "compliance" || command == "tags" || command == "governance") {
+    options.command = CommandKind::Compliance;
+    collect_selectors(options, args, index);
   } else if (command == "version") {
     options.command = CommandKind::Version;
     parse_flags_only(options, args, index, "version");
@@ -342,6 +368,7 @@ Usage:
   azdash [global flags] cost
   azdash [global flags] budget [names...]
   azdash [global flags] commitments [skus...]
+  azdash [global flags] compliance [selectors...]
   azdash [global flags] trend [services...]
   azdash [global flags] waste [checks...]
   azdash [global flags] report cost [--path file-or-directory]
@@ -361,9 +388,11 @@ Global flags:
   --budget <name>                     Filter Azure budget by name.
   --term <1yr|3yr>                    Commitment term filter (1 Year or 3 Years).
   --min-savings <amount>              Minimum monthly savings filter for commitments.
+  --required-tags <tag1,tag2,...>     Required tag names for FinOps compliance governance audit.
+  --min-compliance <pct>              Fail with exit code 2 if compliance % is below threshold.
   --rest, --use-rest                  Direct Azure REST API mode (uses OAuth2 client credentials).
   --tenant <id>                       Reserved for tenant-aware providers.
-  -o, --output <table|json|csv|markdown>  Output format. Defaults to table.
+  -o, --output <table|json|csv|markdown|html>  Output format. Defaults to table.
   --path <file-or-directory>          Report output path.
   --group-by <service|resource-group> Cost aggregation dimension. Defaults to service.
   --group-by-tag <key>                Group costs by a specific Azure tag (overrides --group-by).
@@ -397,6 +426,8 @@ auto to_string(OutputFormat format) -> std::string {
       return "csv";
     case OutputFormat::Markdown:
       return "markdown";
+    case OutputFormat::Html:
+      return "html";
     case OutputFormat::Table:
     default:
       return "table";

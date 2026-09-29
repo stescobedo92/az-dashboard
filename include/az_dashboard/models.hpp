@@ -17,7 +17,8 @@ enum class OutputFormat {
   Table,
   Json,
   Csv,
-  Markdown
+  Markdown,
+  Html
 };
 
 /**
@@ -40,7 +41,8 @@ enum class CommandKind {
   LinkAccount,
   UI,
   Budget,
-  Commitments
+  Commitments,
+  Compliance
 };
 
 /**
@@ -109,6 +111,8 @@ struct CliOptions {
   std::string commitment_term;
   double min_savings{0.0};
   bool use_rest{false};
+  std::vector<std::string> required_tags;
+  double min_compliance_percent{0.0};
 };
 
 // Azure analysis domain models.
@@ -229,6 +233,36 @@ struct AnalysisSnapshot {
   std::vector<CostComparisonRow> costs;
   std::vector<MonthCost> trends;
   std::vector<WasteFinding> waste;
+};
+
+/**
+ * @brief Individual non-compliant or untagged resource detail.
+ */
+struct ResourceComplianceItem {
+  std::string resource_name;
+  std::string resource_group;
+  std::string resource_type;
+  double cost{0.0};
+  std::string currency{"USD"};
+  std::vector<std::string> missing_tags;
+  std::map<std::string, std::string> tags;
+};
+
+/**
+ * @brief Aggregated tag compliance and cost allocation summary.
+ */
+struct TagComplianceSummary {
+  std::size_t total_resources{0};
+  std::size_t compliant_resources{0};
+  std::size_t non_compliant_resources{0};
+  double total_spend{0.0};
+  double allocated_spend{0.0};
+  double unallocated_spend{0.0};
+  double compliance_percentage{0.0};
+  std::string currency{"USD"};
+  std::map<std::string, std::size_t> missing_tag_counts;
+  std::map<std::string, double> missing_tag_costs;
+  std::vector<ResourceComplianceItem> non_compliant_items;
 };
 
 // External process execution models.

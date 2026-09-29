@@ -37,6 +37,8 @@ The implementation is intentionally layered:
 - **Remediation Script Generator (`--generate-remediation <path>`)**: Automatically output executable bash scripts for remediating identified waste.
 - **Extended FinOps Waste Heuristics**: Detects orphan NSGs, unused Route Tables, idle NAT Gateways ($32.40/mo savings), empty App Service Plans, unattached disks, orphan public IPs, and stopped VMs.
 - **Advanced Multi-Tag Filtering (`--filter-tag`)**: Filter resources with syntax supporting exact matches (`k=v`), multi-value OR (`k=v1,v2`), negation (`k!=v`), existence (`k`), and absence (`!k`).
+- **Tag Compliance Governance (`azdash compliance`)**: Audit Azure resources against required tags (`--required-tags`), measure unallocated untagged spend, and enforce CI/CD compliance gates (`--min-compliance <pct>`).
+- **Responsive HTML Reports (`-o html`)**: Generate modern, standalone executive HTML dashboards for costs, trends, waste, budgets, commitments, and compliance.
 - **Server-Side JMESPath Projection (`--fast`)**: Trim 80-90% of payload bandwidth by projecting fields directly within Azure CLI queries.
 - **Local Trend Caching (`--no-cache` to bypass)**: Cache finalized historical billing months in local storage with atomic writes for instant trend reports.
 - **Webhook Alerts (`--webhook <url>`)**: Automatic notifications with severity coloring dispatched to Slack, Microsoft Teams (MessageCards), or generic JSON endpoints.
@@ -189,8 +191,18 @@ azdash --budget "Q3-Production" budget
 azdash commitments
 azdash ri --term 3yr --min-savings 100
 
-# Send Slack / Teams alert notifications upon budget overrun or anomalies
+# Tag compliance governance audit & cost allocation
+azdash compliance
+azdash compliance --required-tags "Environment,Owner,CostCenter,Application"
+azdash --min-compliance 85.0 compliance  # Return exit code 2 if compliance < 85%
+
+# Generate executive responsive HTML dashboards
+azdash -o html cost > cost_report.html
+azdash -o html compliance > compliance_report.html
+
+# Send Slack / Teams alert notifications upon budget overrun, anomalies, or compliance breaches
 azdash --webhook "https://hooks.slack.com/services/..." --fail-if-exceeds 1000 cost
+azdash --webhook "https://hooks.slack.com/services/..." --min-compliance 90 compliance
 
 # JSON, CSV, or Markdown output
 azdash --output json cost

@@ -489,4 +489,50 @@ auto AzureRestClient::commitment_recommendations(const CliOptions& options) cons
   return filtered;
 }
 
+auto AzureRestClient::tag_compliance(const CliOptions& options) const -> TagComplianceSummary {
+  const auto start = detail::civil_date(0, true);
+  const auto end = detail::civil_date(0, false);
+  const auto subs = get_target_subscriptions(options);
+
+  auto all_summaries = parallel_transform(subs, [&](const std::string& sub) -> TagComplianceSummary {
+    const std::string url = "https://management.azure.com/subscriptions/" + sub +
+                            "/providers/Microsoft.Consumption/usageDetails?$filter=properties/usageStart%20ge%20'" +
+                            start + "'%20and%20properties/usageEnd%20le%20'" + end + "'&api-version=2021-10-01";
+    try {
+      const auto payload = request_json(url);
+      return detail::evaluate_tag_compliance(extract_json_array(payload), options.required_tags);
+    } catch (...) {
+      return {};
+    }
+  });
+
+  TagComplianceSummary combined;
+  if (!all_summaries.empty()) {
+    combined.currency = all_summaries.front().currency;
+  }
+  for (auto& s : all_summaries) {
+    combined.total_resources += s.total_resources;
+    combined.compliant_resources += s.compliant_resources;
+    combined.non_compliant_resources += s.non_compliant_resources;
+    combined.total_spend += s.total_spend;
+    combined.allocated_spend += s.allocated_spend;
+    combined.unallocated_spend += s.unallocated_spend;
+    for (const auto& [tag, count] : s.missing_tag_counts) {
+      combined.missing_tag_counts[tag] += count;
+    }
+    for (const auto& [tag, cost] : s.missing_tag_costs) {
+      combined.missing_tag_costs[tag] += cost;
+    }
+    combined.non_compliant_items.insert(combined.non_compliant_items.end(),
+                                        std::make_move_iterator(s.non_compliant_items.begin()),
+                                        std::make_move_iterator(s.non_compliant_items.end()));
+  }
+
+  combined.compliance_percentage = combined.total_resources > 0
+                                       ? (100.0 * static_cast<double>(combined.compliant_resources) /
+                                          static_cast<double>(combined.total_resources))
+                                       : 100.0;
+  return combined;
+}
+
 } // namespace azdash

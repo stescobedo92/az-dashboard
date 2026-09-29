@@ -625,6 +625,32 @@ auto execute_commitments(const CliOptions& options, const CliRuntime& runtime) -
   return 0;
 }
 
+auto execute_compliance(const CliOptions& options, const CliRuntime& runtime) -> int {
+  if (!runtime.compliance_provider) {
+    runtime.err << "error: compliance provider unavailable\n";
+    return 1;
+  }
+
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  auto summary = runtime.compliance_provider->tag_compliance(resolved_options);
+  render_compliance(summary, options.output, runtime.out);
+
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    const auto payload = make_compliance_webhook_payload(summary, resolved_options);
+    if (!runtime.webhook_sender->send(options.webhook_url, payload)) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
+  if (options.min_compliance_percent > 0.0 && summary.compliance_percentage < options.min_compliance_percent) {
+    runtime.err << "error: tag compliance " << std::fixed << std::setprecision(1) << summary.compliance_percentage
+                << "% is below required minimum threshold " << options.min_compliance_percent << "%\n";
+    return 2;
+  }
+
+  return 0;
+}
+
 using ScreenWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&);
 using ReportWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&, const AccountInfo&);
 
@@ -648,6 +674,7 @@ constexpr auto screen_workflows = std::array{
     ScreenWorkflowDefinition{CommandKind::UI, execute_ui},
     ScreenWorkflowDefinition{CommandKind::Budget, execute_budget},
     ScreenWorkflowDefinition{CommandKind::Commitments, execute_commitments},
+    ScreenWorkflowDefinition{CommandKind::Compliance, execute_compliance},
 };
 
 constexpr auto report_workflows = std::array{
@@ -727,7 +754,7 @@ auto run(const CliOptions& options) -> int {
   auto runner = ShellCommandRunner();
   auto runtime = CliRuntime{std::cout, std::cerr,     provider,     provider,
                             provider,  provider,      report_writer, alias_store,
-                            history_store, &webhook_sender, &std::cin, &runner, &provider, &provider};
+                            history_store, &webhook_sender, &std::cin, &runner, &provider, &provider, &provider};
   return run(options, runtime);
 }
 

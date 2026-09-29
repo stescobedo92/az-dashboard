@@ -18,6 +18,9 @@ void append_vm_heuristics(const nlohmann::json& payload, std::vector<WasteFindin
 auto normalize_term(std::string_view raw) -> std::string;
 auto civil_date(int month_offset, bool month_start) -> std::string;
 auto month_label(int month_offset) -> std::string;
+auto evaluate_tag_compliance(const nlohmann::json& payload,
+                             std::span<const std::string> required_tags,
+                             std::string_view default_currency = "USD") -> TagComplianceSummary;
 } // namespace detail
 
 /**
@@ -79,6 +82,7 @@ public:
   [[nodiscard]] virtual auto waste_findings(const CliOptions& options) const -> std::vector<WasteFinding> = 0;
   [[nodiscard]] virtual auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> = 0;
   [[nodiscard]] virtual auto commitment_recommendations(const CliOptions& options) const -> std::vector<CommitmentRecommendation> = 0;
+  [[nodiscard]] virtual auto tag_compliance(const CliOptions& options) const -> TagComplianceSummary = 0;
 };
 
 /**
@@ -146,6 +150,13 @@ public:
    * @return Active commitment recommendations.
    */
   [[nodiscard]] auto commitment_recommendations(const CliOptions& options) const -> std::vector<CommitmentRecommendation> override;
+
+  /**
+   * @brief Evaluates resource tagging compliance against required organization tags.
+   * @param options Parsed CLI options.
+   * @return Tag compliance and unallocated spend summary.
+   */
+  [[nodiscard]] auto tag_compliance(const CliOptions& options) const -> TagComplianceSummary override;
 
 private:
   std::shared_ptr<ICommandRunner> runner_;

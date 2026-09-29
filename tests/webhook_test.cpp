@@ -133,6 +133,19 @@ public:
          .details = "1 Year reservation recommendation"}
     };
   }
+
+  [[nodiscard]] auto tag_compliance(const azdash::CliOptions&) const -> azdash::TagComplianceSummary override {
+    azdash::TagComplianceSummary summary;
+    summary.total_resources = 10;
+    summary.compliant_resources = 9;
+    summary.non_compliant_resources = 1;
+    summary.total_spend = 500.0;
+    summary.allocated_spend = 450.0;
+    summary.unallocated_spend = 50.0;
+    summary.compliance_percentage = 90.0;
+    summary.currency = "USD";
+    return summary;
+  }
 };
 
 } // namespace

@@ -64,6 +64,7 @@ public:
   [[nodiscard]] auto budgets(const CliOptions& options) const -> std::vector<BudgetInfo> override;
   [[nodiscard]] auto commitment_recommendations(const CliOptions& options) const
       -> std::vector<CommitmentRecommendation> override;
+  [[nodiscard]] auto tag_compliance(const CliOptions& options) const -> TagComplianceSummary override;
 
   [[nodiscard]] auto acquire_token() const -> std::string;
 

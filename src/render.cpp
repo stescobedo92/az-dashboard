@@ -256,6 +256,103 @@ private:
   }
 };
 
+class HtmlTableWriter {
+public:
+  void write(std::string_view title,
+             const std::vector<std::vector<std::string>>& rows,
+             std::ostream& out,
+             const std::vector<std::string>& footer_lines = {}) const {
+    out << "<!DOCTYPE html>\n"
+        << "<html lang=\"en\">\n"
+        << "<head>\n"
+        << "  <meta charset=\"UTF-8\">\n"
+        << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+        << "  <title>" << escape_html(title) << "</title>\n"
+        << "  <style>\n"
+        << "    :root {\n"
+        << "      --bg: #0f172a;\n"
+        << "      --surface: #1e293b;\n"
+        << "      --surface-border: #334155;\n"
+        << "      --text: #f8fafc;\n"
+        << "      --text-muted: #94a3b8;\n"
+        << "      --primary: #38bdf8;\n"
+        << "      --success: #4ade80;\n"
+        << "      --warning: #fbbf24;\n"
+        << "      --danger: #f87171;\n"
+        << "    }\n"
+        << "    * { box-sizing: border-box; margin: 0; padding: 0; }\n"
+        << "    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg); color: var(--text); padding: 2rem; line-height: 1.5; }\n"
+        << "    .container { max-width: 1200px; margin: 0 auto; }\n"
+        << "    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--surface-border); }\n"
+        << "    h1 { font-size: 1.75rem; font-weight: 700; color: var(--primary); letter-spacing: -0.025em; }\n"
+        << "    .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; background: var(--surface-border); color: var(--text-muted); }\n"
+        << "    .card { background: var(--surface); border: 1px solid var(--surface-border); border-radius: 0.75rem; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); margin-bottom: 1.5rem; }\n"
+        << "    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.875rem; }\n"
+        << "    th { background: #162032; padding: 0.75rem 1rem; font-weight: 600; color: var(--primary); border-bottom: 1px solid var(--surface-border); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }\n"
+        << "    td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--surface-border); }\n"
+        << "    tr:last-child td { border-bottom: none; }\n"
+        << "    tr:hover td { background: rgba(255, 255, 255, 0.02); }\n"
+        << "    .footer { margin-top: 1rem; padding: 1rem; background: var(--surface); border-radius: 0.5rem; border: 1px solid var(--surface-border); font-size: 0.875rem; color: var(--text-muted); }\n"
+        << "  </style>\n"
+        << "</head>\n"
+        << "<body>\n"
+        << "  <div class=\"container\">\n"
+        << "    <header>\n"
+        << "      <h1>" << escape_html(title) << "</h1>\n"
+        << "      <span class=\"badge\">azdash FinOps</span>\n"
+        << "    </header>\n"
+        << "    <div class=\"card\">\n"
+        << "      <table>\n";
+
+    if (!rows.empty()) {
+      out << "        <thead>\n          <tr>\n";
+      for (const auto& cell : rows.front()) {
+        out << "            <th>" << escape_html(cell) << "</th>\n";
+      }
+      out << "          </tr>\n        </thead>\n        <tbody>\n";
+      for (std::size_t i = 1; i < rows.size(); ++i) {
+        out << "          <tr>\n";
+        for (const auto& cell : rows[i]) {
+          out << "            <td>" << escape_html(cell) << "</td>\n";
+        }
+        out << "          </tr>\n";
+      }
+      out << "        </tbody>\n";
+    }
+
+    out << "      </table>\n"
+        << "    </div>\n";
+
+    if (!footer_lines.empty()) {
+      out << "    <div class=\"footer\">\n";
+      for (const auto& line : footer_lines) {
+        out << "      <p>" << escape_html(line) << "</p>\n";
+      }
+      out << "    </div>\n";
+    }
+
+    out << "  </div>\n"
+        << "</body>\n"
+        << "</html>\n";
+  }
+
+  static auto escape_html(std::string_view text) -> std::string {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char c : text) {
+      switch (c) {
+      case '&': escaped += "&amp;"; break;
+      case '<': escaped += "&lt;"; break;
+      case '>': escaped += "&gt;"; break;
+      case '"': escaped += "&quot;"; break;
+      case '\'': escaped += "&#39;"; break;
+      default: escaped += c; break;
+      }
+    }
+    return escaped;
+  }
+};
+
 class CostRowsView {
 public:
   explicit CostRowsView(const std::vector<CostComparisonRow>& rows, double projected_total) : rows_(rows), projected_total_(projected_total) {}
@@ -669,6 +766,9 @@ void render_rows(const RowsView& rows, OutputFormat format, std::ostream& out) {
   case OutputFormat::Markdown:
     MarkdownTableWriter{}.write(rows.markdown_rows(), out, rows.markdown_footer());
     return;
+  case OutputFormat::Html:
+    HtmlTableWriter{}.write("azdash Report", rows.markdown_rows(), out, rows.markdown_footer());
+    return;
   case OutputFormat::Table:
     break;
   }
@@ -807,6 +907,263 @@ private:
 
 void render_commitments(const std::vector<CommitmentRecommendation>& recommendations, OutputFormat format, std::ostream& out) {
   render_rows(CommitmentsView(recommendations), format, out);
+}
+
+void render_compliance(const TagComplianceSummary& summary, OutputFormat format, std::ostream& out) {
+  switch (format) {
+  case OutputFormat::Json: {
+    nlohmann::json root;
+    root["totalResources"] = summary.total_resources;
+    root["compliantResources"] = summary.compliant_resources;
+    root["nonCompliantResources"] = summary.non_compliant_resources;
+    root["compliancePercentage"] = summary.compliance_percentage;
+    root["totalSpend"] = summary.total_spend;
+    root["allocatedSpend"] = summary.allocated_spend;
+    root["unallocatedSpend"] = summary.unallocated_spend;
+    root["currency"] = summary.currency;
+
+    nlohmann::json missing_counts = nlohmann::json::object();
+    for (const auto& [tag, count] : summary.missing_tag_counts) {
+      missing_counts[tag] = count;
+    }
+    root["missingTagCounts"] = missing_counts;
+
+    nlohmann::json missing_costs = nlohmann::json::object();
+    for (const auto& [tag, cost] : summary.missing_tag_costs) {
+      missing_costs[tag] = cost;
+    }
+    root["missingTagCosts"] = missing_costs;
+
+    nlohmann::json items = nlohmann::json::array();
+    for (const auto& item : summary.non_compliant_items) {
+      nlohmann::json it;
+      it["resourceName"] = item.resource_name;
+      it["resourceGroup"] = item.resource_group;
+      it["resourceType"] = item.resource_type;
+      it["cost"] = item.cost;
+      it["currency"] = item.currency;
+      it["missingTags"] = item.missing_tags;
+      it["tags"] = item.tags;
+      items.push_back(it);
+    }
+    root["nonCompliantItems"] = items;
+
+    JsonWriter{}.write(root, out);
+    return;
+  }
+  case OutputFormat::Csv: {
+    CsvDocumentWriter csv(out);
+    csv.header("resource_name,resource_group,resource_type,cost,currency,missing_tags");
+    for (const auto& item : summary.non_compliant_items) {
+      csv.row([&item](CsvRowWriter& writer) {
+        writer.escaped_cell(item.resource_name);
+        writer.escaped_cell(item.resource_group);
+        writer.escaped_cell(item.resource_type);
+        writer.raw_cell(NumberFormatter::money(item.cost));
+        writer.escaped_cell(item.currency);
+        std::string missing_str;
+        for (std::size_t i = 0; i < item.missing_tags.size(); ++i) {
+          if (i > 0) missing_str += ";";
+          missing_str += item.missing_tags[i];
+        }
+        writer.escaped_cell(missing_str);
+      });
+    }
+    return;
+  }
+  case OutputFormat::Markdown: {
+    out << "# Azure Tag Compliance & Cost Allocation Report\n\n";
+    out << "- **Overall Compliance:** " << NumberFormatter::percent(summary.compliance_percentage) << "\n";
+    out << "- **Compliant Resources:** " << summary.compliant_resources << " / " << summary.total_resources << "\n";
+    out << "- **Total Tracked Spend:** " << NumberFormatter::money(summary.total_spend) << " " << summary.currency << "\n";
+    out << "- **Allocated Spend:** " << NumberFormatter::money(summary.allocated_spend) << " " << summary.currency
+        << " (" << NumberFormatter::percent(summary.total_spend > 0.0 ? (100.0 * summary.allocated_spend / summary.total_spend) : 100.0) << ")\n";
+    out << "- **Unallocated Spend:** " << NumberFormatter::money(summary.unallocated_spend) << " " << summary.currency
+        << " (" << NumberFormatter::percent(summary.total_spend > 0.0 ? (100.0 * summary.unallocated_spend / summary.total_spend) : 0.0) << ")\n\n";
+
+    out << "### Missing Tags Breakdown\n\n";
+    std::vector<std::vector<std::string>> tag_rows{{"Tag", "Missing Count", "Unallocated Spend"}};
+    for (const auto& [tag, count] : summary.missing_tag_counts) {
+      double cost = 0.0;
+      if (auto it = summary.missing_tag_costs.find(tag); it != summary.missing_tag_costs.end()) {
+        cost = it->second;
+      }
+      tag_rows.push_back({tag, std::to_string(count), NumberFormatter::money(cost) + " " + summary.currency});
+    }
+    if (tag_rows.size() == 1) {
+      tag_rows.push_back({"(None)", "0", "0.00 " + summary.currency});
+    }
+    MarkdownTableWriter{}.write(tag_rows, out);
+
+    out << "\n### Non-Compliant Resources\n\n";
+    std::vector<std::vector<std::string>> item_rows{{"Resource", "Resource Group", "Type", "Cost", "Missing Tags"}};
+    for (const auto& item : summary.non_compliant_items) {
+      std::string missing_str;
+      for (std::size_t i = 0; i < item.missing_tags.size(); ++i) {
+        if (i > 0) missing_str += ", ";
+        missing_str += item.missing_tags[i];
+      }
+      item_rows.push_back({item.resource_name, item.resource_group, item.resource_type,
+                           NumberFormatter::money(item.cost) + " " + item.currency, missing_str});
+    }
+    if (item_rows.size() == 1) {
+      item_rows.push_back({"(None)", "-", "-", "0.00 " + summary.currency, "All resources compliant!"});
+    }
+    MarkdownTableWriter{}.write(item_rows, out);
+    return;
+  }
+  case OutputFormat::Html: {
+    out << "<!DOCTYPE html>\n"
+        << "<html lang=\"en\">\n"
+        << "<head>\n"
+        << "  <meta charset=\"UTF-8\">\n"
+        << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+        << "  <title>Azure Tag Compliance &amp; Cost Allocation Report</title>\n"
+        << "  <style>\n"
+        << "    :root {\n"
+        << "      --bg: #0f172a;\n"
+        << "      --surface: #1e293b;\n"
+        << "      --surface-border: #334155;\n"
+        << "      --text: #f8fafc;\n"
+        << "      --text-muted: #94a3b8;\n"
+        << "      --primary: #38bdf8;\n"
+        << "      --success: #4ade80;\n"
+        << "      --warning: #fbbf24;\n"
+        << "      --danger: #f87171;\n"
+        << "    }\n"
+        << "    * { box-sizing: border-box; margin: 0; padding: 0; }\n"
+        << "    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: var(--bg); color: var(--text); padding: 2rem; line-height: 1.5; }\n"
+        << "    .container { max-width: 1200px; margin: 0 auto; }\n"
+        << "    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--surface-border); }\n"
+        << "    h1 { font-size: 1.75rem; font-weight: 700; color: var(--primary); }\n"
+        << "    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem; margin-bottom: 2rem; }\n"
+        << "    .kpi-card { background: var(--surface); border: 1px solid var(--surface-border); border-radius: 0.75rem; padding: 1.25rem; }\n"
+        << "    .kpi-title { font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600; margin-bottom: 0.5rem; }\n"
+        << "    .kpi-value { font-size: 1.75rem; font-weight: 700; }\n"
+        << "    .kpi-sub { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; }\n"
+        << "    .card { background: var(--surface); border: 1px solid var(--surface-border); border-radius: 0.75rem; overflow: hidden; margin-bottom: 2rem; }\n"
+        << "    .card-header { padding: 1rem 1.25rem; font-weight: 600; font-size: 1rem; border-bottom: 1px solid var(--surface-border); background: #162032; color: var(--primary); }\n"
+        << "    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.875rem; }\n"
+        << "    th { background: #162032; padding: 0.75rem 1rem; font-weight: 600; color: var(--primary); border-bottom: 1px solid var(--surface-border); text-transform: uppercase; font-size: 0.75rem; }\n"
+        << "    td { padding: 0.75rem 1rem; border-bottom: 1px solid var(--surface-border); }\n"
+        << "    tr:last-child td { border-bottom: none; }\n"
+        << "    .tag-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; background: rgba(248, 113, 113, 0.15); color: var(--danger); border: 1px solid rgba(248, 113, 113, 0.3); margin-right: 0.25rem; }\n"
+        << "  </style>\n"
+        << "</head>\n"
+        << "<body>\n"
+        << "  <div class=\"container\">\n"
+        << "    <header>\n"
+        << "      <h1>Azure Tag Compliance &amp; Cost Allocation Report</h1>\n"
+        << "      <span style=\"color: var(--text-muted); font-size: 0.875rem;\">azdash FinOps Governance</span>\n"
+        << "    </header>\n"
+        << "    <div class=\"grid\">\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Tag Compliance</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: "
+        << (summary.compliance_percentage >= 90.0 ? "var(--success)" : (summary.compliance_percentage >= 75.0 ? "var(--warning)" : "var(--danger)"))
+        << "\">" << NumberFormatter::percent(summary.compliance_percentage) << "</div>\n"
+        << "        <div class=\"kpi-sub\">" << summary.compliant_resources << " of " << summary.total_resources << " resources compliant</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Unallocated Spend</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: var(--danger);\">"
+        << NumberFormatter::money(summary.unallocated_spend) << " " << HtmlTableWriter::escape_html(summary.currency) << "</div>\n"
+        << "        <div class=\"kpi-sub\">" << summary.non_compliant_resources << " non-compliant resources</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Allocated Spend</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: var(--success);\">"
+        << NumberFormatter::money(summary.allocated_spend) << " " << HtmlTableWriter::escape_html(summary.currency) << "</div>\n"
+        << "        <div class=\"kpi-sub\">Total: " << NumberFormatter::money(summary.total_spend) << " " << HtmlTableWriter::escape_html(summary.currency) << "</div>\n"
+        << "      </div>\n"
+        << "    </div>\n";
+
+    out << "    <div class=\"card\">\n"
+        << "      <div class=\"card-header\">Missing Tags Breakdown</div>\n"
+        << "      <table>\n"
+        << "        <thead><tr><th>Tag</th><th>Missing Count</th><th>Unallocated Spend</th></tr></thead>\n"
+        << "        <tbody>\n";
+    if (summary.missing_tag_counts.empty()) {
+      out << "          <tr><td colspan=\"3\" style=\"text-align: center; color: var(--success);\">No missing tags!</td></tr>\n";
+    } else {
+      for (const auto& [tag, count] : summary.missing_tag_counts) {
+        double cost = 0.0;
+        if (auto it = summary.missing_tag_costs.find(tag); it != summary.missing_tag_costs.end()) {
+          cost = it->second;
+        }
+        out << "          <tr><td>" << HtmlTableWriter::escape_html(tag) << "</td><td>" << count << "</td><td>"
+            << NumberFormatter::money(cost) << " " << HtmlTableWriter::escape_html(summary.currency) << "</td></tr>\n";
+      }
+    }
+    out << "        </tbody>\n      </table>\n    </div>\n";
+
+    out << "    <div class=\"card\">\n"
+        << "      <div class=\"card-header\">Non-Compliant Resources (" << summary.non_compliant_items.size() << ")</div>\n"
+        << "      <table>\n"
+        << "        <thead><tr><th>Resource</th><th>Resource Group</th><th>Type</th><th>Cost</th><th>Missing Tags</th></tr></thead>\n"
+        << "        <tbody>\n";
+    if (summary.non_compliant_items.empty()) {
+      out << "          <tr><td colspan=\"5\" style=\"text-align: center; color: var(--success);\">All resources compliant!</td></tr>\n";
+    } else {
+      for (const auto& item : summary.non_compliant_items) {
+        out << "          <tr><td>" << HtmlTableWriter::escape_html(item.resource_name) << "</td><td>"
+            << HtmlTableWriter::escape_html(item.resource_group) << "</td><td>"
+            << HtmlTableWriter::escape_html(item.resource_type) << "</td><td>"
+            << NumberFormatter::money(item.cost) << " " << HtmlTableWriter::escape_html(item.currency) << "</td><td>";
+        for (const auto& mt : item.missing_tags) {
+          out << "<span class=\"tag-badge\">" << HtmlTableWriter::escape_html(mt) << "</span>";
+        }
+        out << "</td></tr>\n";
+      }
+    }
+    out << "        </tbody>\n      </table>\n    </div>\n";
+
+    out << "  </div>\n</body>\n</html>\n";
+    return;
+  }
+  case OutputFormat::Table:
+  default:
+    break;
+  }
+
+  std::vector<std::vector<std::string>> tag_rows{{"Required Tag", "Missing Count", "Spend Impact"}};
+  for (const auto& [tag, count] : summary.missing_tag_counts) {
+    double cost = 0.0;
+    if (auto it = summary.missing_tag_costs.find(tag); it != summary.missing_tag_costs.end()) {
+      cost = it->second;
+    }
+    tag_rows.push_back({tag, std::to_string(count), NumberFormatter::money(cost) + " " + summary.currency});
+  }
+
+  std::vector<std::vector<std::string>> item_rows{{"Resource", "Resource Group", "Type", "Cost", "Missing Tags"}};
+  for (const auto& item : summary.non_compliant_items) {
+    std::string missing_str;
+    for (std::size_t i = 0; i < item.missing_tags.size(); ++i) {
+      if (i > 0) missing_str += ", ";
+      missing_str += item.missing_tags[i];
+    }
+    item_rows.push_back({item.resource_name, item.resource_group, item.resource_type,
+                         NumberFormatter::money(item.cost) + " " + item.currency, missing_str});
+  }
+  if (item_rows.size() == 1) {
+    item_rows.push_back({"(None)", "-", "-", "0.00 " + summary.currency, "All resources compliant!"});
+  }
+
+  auto footer = ftxui::vbox({
+      ftxui::hbox({
+          ftxui::text(" Compliance: ") | ftxui::bold | ftxui::color(ftxui::Color::Yellow),
+          ftxui::text(NumberFormatter::percent(summary.compliance_percentage)) | ftxui::bold |
+              ftxui::color(summary.compliance_percentage >= 90.0 ? ftxui::Color::Green : (summary.compliance_percentage >= 75.0 ? ftxui::Color::Yellow : ftxui::Color::Red)),
+          ftxui::text(" (" + std::to_string(summary.compliant_resources) + "/" + std::to_string(summary.total_resources) + " resources)  |  "),
+          ftxui::text("Unallocated Spend: ") | ftxui::bold | ftxui::color(ftxui::Color::Red),
+          ftxui::text(NumberFormatter::money(summary.unallocated_spend) + " " + summary.currency) | ftxui::bold | ftxui::color(ftxui::Color::White),
+      }),
+  });
+
+  if (!summary.missing_tag_counts.empty()) {
+    TerminalTableWriter{}.write(tag_rows, out, ftxui::text(""));
+  }
+  TerminalTableWriter{}.write(item_rows, out, footer);
 }
 
 void render_help_screen(std::ostream& out) {

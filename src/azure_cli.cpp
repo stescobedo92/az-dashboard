@@ -713,6 +713,95 @@ auto parse_budget_items(const nlohmann::json& payload, const CliOptions& options
   return budgets;
 }
 
+auto evaluate_tag_compliance(const nlohmann::json& payload,
+                             std::span<const std::string> required_tags,
+                             std::string_view default_currency) -> TagComplianceSummary {
+  TagComplianceSummary summary;
+  summary.currency = std::string(default_currency.empty() ? "USD" : default_currency);
+
+  std::vector<std::string> tags_to_check;
+  if (required_tags.empty()) {
+    tags_to_check = {"Environment", "Owner", "CostCenter"};
+  } else {
+    tags_to_check.assign(required_tags.begin(), required_tags.end());
+  }
+
+  if (!payload.is_array()) {
+    return summary;
+  }
+
+  auto has_tag_case_insensitive = [](const std::map<std::string, std::string>& tags, std::string_view key) -> bool {
+    for (const auto& [tag_key, tag_val] : tags) {
+      if (tag_key.size() == key.size() &&
+          std::equal(tag_key.begin(), tag_key.end(), key.begin(), key.end(), [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+          })) {
+        return !tag_val.empty();
+      }
+    }
+    return false;
+  };
+
+  for (const auto& item : payload) {
+    const auto properties = normalize_usage_item(item);
+    auto tags = parse_tags(item);
+
+    double cost = json_number(properties, {"pretaxCost", "cost", "costInBillingCurrency"});
+    auto cur = json_string(properties, {"billingCurrency", "currency"});
+    if (!cur.empty()) {
+      summary.currency = cur;
+    }
+
+    auto name = json_string(properties, {"instanceName", "resourceName", "name"});
+    if (name.empty()) {
+      name = json_string(item, {"name"});
+    }
+    if (name.empty()) {
+      name = json_string(properties, {"consumedService", "meterSubCategory"});
+    }
+
+    auto rg = resource_group_from_usage(properties);
+    auto type = json_string(properties, {"consumedService", "resourceType"});
+    if (type.empty()) {
+      type = json_string(item, {"type"});
+    }
+
+    std::vector<std::string> missing;
+    for (const auto& req : tags_to_check) {
+      if (!has_tag_case_insensitive(tags, req)) {
+        missing.push_back(req);
+        summary.missing_tag_counts[req]++;
+        summary.missing_tag_costs[req] += cost;
+      }
+    }
+
+    if (missing.empty()) {
+      summary.compliant_resources++;
+      summary.allocated_spend += cost;
+    } else {
+      summary.non_compliant_resources++;
+      summary.unallocated_spend += cost;
+      summary.non_compliant_items.push_back(ResourceComplianceItem{
+          .resource_name = std::move(name),
+          .resource_group = std::move(rg),
+          .resource_type = std::move(type),
+          .cost = cost,
+          .currency = summary.currency,
+          .missing_tags = std::move(missing),
+          .tags = std::move(tags),
+      });
+    }
+  }
+
+  summary.total_resources = summary.compliant_resources + summary.non_compliant_resources;
+  summary.total_spend = summary.allocated_spend + summary.unallocated_spend;
+  summary.compliance_percentage = summary.total_resources > 0
+                                      ? (100.0 * static_cast<double>(summary.compliant_resources) /
+                                         static_cast<double>(summary.total_resources))
+                                      : 100.0;
+  return summary;
+}
+
 } // namespace detail
 
 namespace {
@@ -1055,6 +1144,48 @@ auto AzureCliClient::commitment_recommendations(const CliOptions& options) const
   }
 
   return filtered;
+}
+
+auto AzureCliClient::tag_compliance(const CliOptions& options) const -> TagComplianceSummary {
+  const AzureCommandBuilder commands;
+  const AzureJsonCommandExecutor executor{*runner_};
+  const auto start = civil_date(0, true);
+  const auto end = civil_date(0, false);
+  auto subs = get_target_subscriptions(options, executor);
+  const std::string query = options.fast_query ? kFastUsageQuery : "";
+
+  auto all_summaries = parallel_transform(subs, [&](const std::string& sub) -> TagComplianceSummary {
+    const auto payload = executor.run(commands.consumption_usage(sub, options.tenant, start, end, query));
+    return detail::evaluate_tag_compliance(payload, options.required_tags);
+  });
+
+  TagComplianceSummary combined;
+  if (!all_summaries.empty()) {
+    combined.currency = all_summaries.front().currency;
+  }
+  for (auto& s : all_summaries) {
+    combined.total_resources += s.total_resources;
+    combined.compliant_resources += s.compliant_resources;
+    combined.non_compliant_resources += s.non_compliant_resources;
+    combined.total_spend += s.total_spend;
+    combined.allocated_spend += s.allocated_spend;
+    combined.unallocated_spend += s.unallocated_spend;
+    for (const auto& [tag, count] : s.missing_tag_counts) {
+      combined.missing_tag_counts[tag] += count;
+    }
+    for (const auto& [tag, cost] : s.missing_tag_costs) {
+      combined.missing_tag_costs[tag] += cost;
+    }
+    combined.non_compliant_items.insert(combined.non_compliant_items.end(),
+                                        std::make_move_iterator(s.non_compliant_items.begin()),
+                                        std::make_move_iterator(s.non_compliant_items.end()));
+  }
+
+  combined.compliance_percentage = combined.total_resources > 0
+                                       ? (100.0 * static_cast<double>(combined.compliant_resources) /
+                                          static_cast<double>(combined.total_resources))
+                                       : 100.0;
+  return combined;
 }
 
 } // namespace azdash

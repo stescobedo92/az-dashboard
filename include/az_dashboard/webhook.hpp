@@ -1,5 +1,7 @@
 #pragma once
 
+#include "az_dashboard/models.hpp"
+
 #include <memory>
 #include <string>
 
@@ -42,6 +44,12 @@ public:
  * @brief Formats a generic JSON webhook payload.
  */
 [[nodiscard]] auto format_generic_payload(const WebhookPayload& payload) -> std::string;
+
+/**
+ * @brief Formats a WebhookPayload for tag compliance alerts.
+ */
+[[nodiscard]] auto make_compliance_webhook_payload(const TagComplianceSummary& summary,
+                                                   const CliOptions& options) -> WebhookPayload;
 
 /**
  * @brief Default CLI webhook sender implementing IWebhookSender.

@@ -65,6 +65,14 @@ void render_budgets(const std::vector<BudgetInfo>& budgets, OutputFormat format,
 void render_commitments(const std::vector<CommitmentRecommendation>& recommendations, OutputFormat format, std::ostream& out);
 
 /**
+ * @brief Renders tag compliance and cost allocation summary to an output stream.
+ * @param summary Compliance summary.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_compliance(const TagComplianceSummary& summary, OutputFormat format, std::ostream& out);
+
+/**
  * @brief Renders interactive help.
  * @param out Output stream.
  */
