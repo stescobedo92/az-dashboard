@@ -396,6 +396,22 @@ auto append_resource_heuristics(const nlohmann::json& payload, std::vector<Waste
         findings.push_back({"appservice", id, type, name, location, "App Service Plan has 0 hosted apps but reserves dedicated compute capacity.", 0.0});
       }
     }
+
+    if (type == "Microsoft.Network/loadBalancers") {
+      const auto& props = item.contains("properties") && item.at("properties").is_object() ? item.at("properties") : item;
+      const bool has_backends = props.contains("backendAddressPools") && props.at("backendAddressPools").is_array() && !props.at("backendAddressPools").empty();
+      if (!has_backends) {
+        findings.push_back({"network", id, type, name, location, "Load Balancer has no backend address pools configured but incurs hourly charges.", 18.00});
+      }
+    }
+
+    if (type == "Microsoft.Network/networkInterfaces") {
+      const auto& props = item.contains("properties") && item.at("properties").is_object() ? item.at("properties") : item;
+      const bool attached_to_vm = props.contains("virtualMachine") && !props.at("virtualMachine").is_null();
+      if (!attached_to_vm) {
+        findings.push_back({"network", id, type, name, location, "Network Interface is not attached to any virtual machine.", 0.0});
+      }
+    }
   }
 }
 

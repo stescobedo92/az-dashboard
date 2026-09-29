@@ -361,11 +361,37 @@ TEST(CliTest, AnomalyFlagsSpikeAgainstTrendBaseline) {
 TEST(CliTest, AnomalyFailsWithoutEnoughTrendData) {
   auto options = azdash::CliOptions{.command = azdash::CommandKind::CostAnomaly};
   auto fake = FakeCliRuntime();
-  fake.trends = {{.month = "2026-06", .total = 100.0}, {.month = "2026-07", .total = 100.0}};
+  fake.trends = {{.month = "2026-06", .total = 100.0}};
 
   EXPECT_EQ(azdash::run(options, fake.runtime()), 1);
 
   EXPECT_NE(fake.err.str().find("Not enough data"), std::string::npos);
+}
+
+TEST(CliTest, AnomalyExitsWithCode2WhenFailOnAnomalySet) {
+  auto options = azdash::CliOptions{
+      .command = azdash::CommandKind::CostAnomaly,
+      .fail_on_anomaly = true,
+  };
+  auto fake = FakeCliRuntime();
+  fake.trends = {{.month = "2026-02", .total = 100.0}, {.month = "2026-03", .total = 110.0},
+                 {.month = "2026-04", .total = 90.0},  {.month = "2026-05", .total = 105.0},
+                 {.month = "2026-06", .total = 95.0},  {.month = "2026-07", .total = 900.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 2);
+}
+
+TEST(CliTest, AnomalyExitsWithCode0WhenFailOnAnomalySetAndNoSpike) {
+  auto options = azdash::CliOptions{
+      .command = azdash::CommandKind::CostAnomaly,
+      .fail_on_anomaly = true,
+  };
+  auto fake = FakeCliRuntime();
+  fake.trends = {{.month = "2026-02", .total = 95.0}, {.month = "2026-03", .total = 105.0},
+                 {.month = "2026-04", .total = 90.0},  {.month = "2026-05", .total = 110.0},
+                 {.month = "2026-06", .total = 100.0}, {.month = "2026-07", .total = 95.0}};
+
+  EXPECT_EQ(azdash::run(options, fake.runtime()), 0);
 }
 
 TEST(CliTest, CostRecordsSnapshotInHistory) {

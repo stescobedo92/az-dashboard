@@ -223,4 +223,150 @@ TEST(RenderTest, TrendHtmlRendersValidHtmlDocument) {
   EXPECT_NE(html.find("250.00"), std::string::npos);
 }
 
+TEST(RenderTest, AnomalyJsonRendersVerdictAndRootCauses) {
+  std::ostringstream out;
+  azdash::CostAnomalyAssessment assessment{
+      .enough_data = true,
+      .anomalous = true,
+      .zscore = 3.5,
+      .mean = 200.0,
+      .stddev = 15.0,
+      .evaluated_total = 450.0,
+      .currency = "USD",
+      .root_causes = {
+          {
+              .service = "Virtual Machines",
+              .current_cost = 350.0,
+              .baseline_mean = 100.0,
+              .cost_delta = 250.0,
+              .percentage_change = 250.0,
+              .contribution_percent = 100.0,
+              .impact = "Critical",
+              .currency = "USD"
+          }
+      }
+  };
+
+  azdash::render_anomaly(assessment, azdash::OutputFormat::Json, out);
+  const std::string json = out.str();
+  EXPECT_NE(json.find("\"anomalous\": true"), std::string::npos);
+  EXPECT_NE(json.find("\"zscore\": 3.5"), std::string::npos);
+  EXPECT_NE(json.find("\"service\": \"Virtual Machines\""), std::string::npos);
+  EXPECT_NE(json.find("\"impact\": \"Critical\""), std::string::npos);
+}
+
+TEST(RenderTest, AnomalyCsvRendersDriverHeadersAndRows) {
+  std::ostringstream out;
+  azdash::CostAnomalyAssessment assessment{
+      .enough_data = true,
+      .anomalous = true,
+      .zscore = 2.5,
+      .mean = 100.0,
+      .stddev = 10.0,
+      .evaluated_total = 200.0,
+      .currency = "USD",
+      .root_causes = {
+          {
+              .service = "Storage",
+              .current_cost = 150.0,
+              .baseline_mean = 50.0,
+              .cost_delta = 100.0,
+              .percentage_change = 200.0,
+              .contribution_percent = 100.0,
+              .impact = "Critical",
+              .currency = "USD"
+          }
+      }
+  };
+
+  azdash::render_anomaly(assessment, azdash::OutputFormat::Csv, out);
+  const std::string csv = out.str();
+  EXPECT_NE(csv.find("service,baseline_mean,current_cost,cost_delta,percentage_change,contribution_percent,impact,currency"), std::string::npos);
+  EXPECT_NE(csv.find("Storage,50.00,150.00,100.00,200.0%,100.0%,Critical,USD"), std::string::npos);
+}
+
+TEST(RenderTest, AnomalyMarkdownRendersStatusAndRootCausesTable) {
+  std::ostringstream out;
+  azdash::CostAnomalyAssessment assessment{
+      .enough_data = true,
+      .anomalous = true,
+      .zscore = 2.8,
+      .mean = 500.0,
+      .stddev = 25.0,
+      .evaluated_total = 750.0,
+      .currency = "USD",
+      .root_causes = {
+          {
+              .service = "App Services",
+              .current_cost = 400.0,
+              .baseline_mean = 150.0,
+              .cost_delta = 250.0,
+              .percentage_change = 166.67,
+              .contribution_percent = 100.0,
+              .impact = "Critical",
+              .currency = "USD"
+          }
+      }
+  };
+
+  azdash::render_anomaly(assessment, azdash::OutputFormat::Markdown, out);
+  const std::string md = out.str();
+  EXPECT_NE(md.find("# Azure Cost Anomaly Assessment"), std::string::npos);
+  EXPECT_NE(md.find("ANOMALOUS (Cost Spike Detected)"), std::string::npos);
+  EXPECT_NE(md.find("| Service | Baseline Mean | Current Cost | Delta | Change | Spike Share | Impact |"), std::string::npos);
+  EXPECT_NE(md.find("App Services"), std::string::npos);
+  EXPECT_NE(md.find("Critical"), std::string::npos);
+}
+
+TEST(RenderTest, AnomalyHtmlRendersValidHtmlDocument) {
+  std::ostringstream out;
+  azdash::CostAnomalyAssessment assessment{
+      .enough_data = true,
+      .anomalous = false,
+      .zscore = 0.5,
+      .mean = 300.0,
+      .stddev = 20.0,
+      .evaluated_total = 310.0,
+      .currency = "USD"
+  };
+
+  azdash::render_anomaly(assessment, azdash::OutputFormat::Html, out);
+  const std::string html = out.str();
+  EXPECT_NE(html.find("<!DOCTYPE html>"), std::string::npos);
+  EXPECT_NE(html.find("<title>Azure Cost Anomaly Report</title>"), std::string::npos);
+  EXPECT_NE(html.find("NORMAL"), std::string::npos);
+  EXPECT_NE(html.find("Evaluated Total"), std::string::npos);
+}
+
+TEST(RenderTest, AnomalyTableRendersStyledBoxAndDrivers) {
+  std::ostringstream out;
+  azdash::CostAnomalyAssessment assessment{
+      .enough_data = true,
+      .anomalous = true,
+      .zscore = 3.1,
+      .mean = 100.0,
+      .stddev = 10.0,
+      .evaluated_total = 250.0,
+      .currency = "USD",
+      .root_causes = {
+          {
+              .service = "Virtual Machines",
+              .current_cost = 200.0,
+              .baseline_mean = 50.0,
+              .cost_delta = 150.0,
+              .percentage_change = 300.0,
+              .contribution_percent = 100.0,
+              .impact = "Critical",
+              .currency = "USD"
+          }
+      }
+  };
+
+  azdash::render_anomaly(assessment, azdash::OutputFormat::Table, out);
+  const std::string table = out.str();
+  EXPECT_NE(table.find("Anomaly detected"), std::string::npos);
+  EXPECT_NE(table.find("z-score"), std::string::npos);
+  EXPECT_NE(table.find("Virtual Machines"), std::string::npos);
+}
+
 } // namespace

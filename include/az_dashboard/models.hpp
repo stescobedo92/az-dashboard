@@ -72,7 +72,8 @@ struct SubscriptionAlias {
 
 enum class ProjectionMode {
   Linear,
-  Weighted
+  Weighted,
+  HoltWinters
 };
 
 /**
@@ -114,6 +115,9 @@ struct CliOptions {
   std::vector<std::string> required_tags;
   double min_compliance_percent{0.0};
   std::string config_path;
+  double anomaly_threshold{2.0};
+  bool fail_on_anomaly{false};
+  std::string remediation_format{"bash"};
 };
 
 // Azure analysis domain models.
@@ -204,6 +208,20 @@ struct CommitmentRecommendation {
 };
 
 /**
+ * @brief Breakdown of a specific service or resource driving a cost anomaly spike.
+ */
+struct CostAnomalyDriver {
+  std::string service;
+  double current_cost{0.0};
+  double baseline_mean{0.0};
+  double cost_delta{0.0};
+  double percentage_change{0.0};
+  double contribution_percent{0.0};
+  std::string impact; // "Critical", "High", "Medium", "Low"
+  std::string currency{"USD"};
+};
+
+/**
  * @brief Statistical verdict for a cost anomaly check.
  */
 struct CostAnomalyAssessment {
@@ -213,6 +231,8 @@ struct CostAnomalyAssessment {
   double mean{0.0};
   double stddev{0.0};
   double evaluated_total{0.0};
+  std::string currency{"USD"};
+  std::vector<CostAnomalyDriver> root_causes;
 };
 
 /**

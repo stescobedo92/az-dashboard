@@ -170,8 +170,9 @@ azdash link-account
 # Cost comparison: current month vs previous matching window
 azdash cost
 
-# Use Bayesian weighted projection instead of linear
+# Use Bayesian weighted or Holt-Winters exponential trend projection
 azdash --projection weighted cost
+azdash --projection holt-winters cost
 
 # Direct Azure REST API mode (without Azure CLI, using OAuth2 SP credentials)
 azdash --rest cost
@@ -205,24 +206,29 @@ azdash --config ./finops-team.json cost
 # Generate executive responsive HTML dashboards
 azdash -o html cost > cost_report.html
 azdash -o html compliance > compliance_report.html
+azdash -o html anomaly > anomaly_report.html
 
 # Send Slack / Teams alert notifications upon budget overrun, anomalies, or compliance breaches
 azdash --webhook "https://hooks.slack.com/services/..." --fail-if-exceeds 1000 cost
 azdash --webhook "https://hooks.slack.com/services/..." --min-compliance 90 compliance
+azdash --webhook "https://hooks.slack.com/services/..." anomaly
 
 # JSON, CSV, or Markdown output
 azdash --output json cost
 azdash --output csv waste advisor compute
 azdash --output markdown cost
 
-# Statistical anomaly check against the six-month baseline
+# Statistical anomaly check with service-level root cause driver attribution
 azdash anomaly
+azdash --anomaly-threshold 2.5 anomaly
+azdash --fail-on-anomaly anomaly  # Return exit code 2 if cost spike detected (CI/CD gate)
 
 # Interactive waste remediation with confirmation prompt
 azdash -i waste
 
-# Generate automated cleanup script with dry-run simulation
+# Generate automated cleanup script (bash or Terraform IaC removal plan)
 azdash --dry-run --generate-remediation ./cleanup.sh waste
+azdash --remediation-format terraform --generate-remediation ./cleanup.tf waste
 
 # Locally recorded snapshots of past cost runs
 azdash history

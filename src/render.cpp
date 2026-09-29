@@ -1166,6 +1166,194 @@ void render_compliance(const TagComplianceSummary& summary, OutputFormat format,
   TerminalTableWriter{}.write(item_rows, out, footer);
 }
 
+void render_anomaly(const CostAnomalyAssessment& assessment, OutputFormat format, std::ostream& out) {
+  switch (format) {
+  case OutputFormat::Json: {
+    nlohmann::json root;
+    root["enoughData"] = assessment.enough_data;
+    root["anomalous"] = assessment.anomalous;
+    root["zscore"] = assessment.zscore;
+    root["mean"] = assessment.mean;
+    root["stddev"] = assessment.stddev;
+    root["evaluatedTotal"] = assessment.evaluated_total;
+    root["currency"] = assessment.currency;
+
+    nlohmann::json drivers = nlohmann::json::array();
+    for (const auto& rc : assessment.root_causes) {
+      nlohmann::json d;
+      d["service"] = rc.service;
+      d["currentCost"] = rc.current_cost;
+      d["baselineMean"] = rc.baseline_mean;
+      d["costDelta"] = rc.cost_delta;
+      d["percentageChange"] = rc.percentage_change;
+      d["contributionPercent"] = rc.contribution_percent;
+      d["impact"] = rc.impact;
+      d["currency"] = rc.currency;
+      drivers.push_back(d);
+    }
+    root["rootCauses"] = drivers;
+    JsonWriter{}.write(root, out);
+    return;
+  }
+  case OutputFormat::Csv: {
+    CsvDocumentWriter csv(out);
+    csv.header("service,baseline_mean,current_cost,cost_delta,percentage_change,contribution_percent,impact,currency");
+    for (const auto& rc : assessment.root_causes) {
+      csv.row([&rc](CsvRowWriter& writer) {
+        writer.escaped_cell(rc.service);
+        writer.raw_cell(NumberFormatter::money(rc.baseline_mean));
+        writer.raw_cell(NumberFormatter::money(rc.current_cost));
+        writer.raw_cell(NumberFormatter::money(rc.cost_delta));
+        writer.raw_cell(NumberFormatter::percent(rc.percentage_change));
+        writer.raw_cell(NumberFormatter::percent(rc.contribution_percent));
+        writer.escaped_cell(rc.impact);
+        writer.escaped_cell(rc.currency);
+      });
+    }
+    return;
+  }
+  case OutputFormat::Markdown: {
+    out << "# Azure Cost Anomaly Assessment\n\n";
+    out << "- **Status:** " << (assessment.anomalous ? "⚠️ **ANOMALOUS (Cost Spike Detected)**" : "✅ **NORMAL (Within Baseline)**") << "\n";
+    out << "- **Evaluated Total:** " << NumberFormatter::money(assessment.evaluated_total) << " " << assessment.currency << "\n";
+    out << "- **6-Month Baseline Mean:** " << NumberFormatter::money(assessment.mean) << " " << assessment.currency << "\n";
+    out << "- **Standard Deviation:** " << NumberFormatter::money(assessment.stddev) << " " << assessment.currency << "\n";
+    out << "- **Z-Score:** " << NumberFormatter::percent(assessment.zscore) << "\n\n";
+
+    if (!assessment.root_causes.empty()) {
+      out << "### Root Cause Cost Drivers\n\n";
+      std::vector<std::vector<std::string>> rows{{"Service", "Baseline Mean", "Current Cost", "Delta", "Change", "Spike Share", "Impact"}};
+      for (const auto& rc : assessment.root_causes) {
+        rows.push_back({
+            rc.service,
+            NumberFormatter::money(rc.baseline_mean) + " " + rc.currency,
+            NumberFormatter::money(rc.current_cost) + " " + rc.currency,
+            "+" + NumberFormatter::money(rc.cost_delta) + " " + rc.currency,
+            "+" + NumberFormatter::percent(rc.percentage_change),
+            NumberFormatter::percent(rc.contribution_percent),
+            rc.impact
+        });
+      }
+      MarkdownTableWriter{}.write(rows, out);
+    }
+    return;
+  }
+  case OutputFormat::Html: {
+    out << "<!DOCTYPE html>\n"
+        << "<html lang=\"en\">\n"
+        << "<head>\n"
+        << "  <meta charset=\"UTF-8\">\n"
+        << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n"
+        << "  <title>Azure Cost Anomaly Report</title>\n"
+        << "  <style>\n"
+        << "    :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --text-muted: #94a3b8; --border: #334155; --danger: #f87171; --warning: #fbbf24; --success: #34d399; --primary: #38bdf8; }\n"
+        << "    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 2rem; }\n"
+        << "    .container { max-width: 1000px; margin: 0 auto; }\n"
+        << "    header { margin-bottom: 2rem; }\n"
+        << "    h1 { margin: 0 0 0.5rem 0; font-size: 1.75rem; color: var(--primary); }\n"
+        << "    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }\n"
+        << "    .kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }\n"
+        << "    .kpi-title { font-size: 0.875rem; color: var(--text-muted); margin-bottom: 0.5rem; }\n"
+        << "    .kpi-value { font-size: 1.5rem; font-weight: 700; }\n"
+        << "    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 1.5rem; }\n"
+        << "    .card-header { padding: 1rem 1.25rem; font-weight: 600; border-bottom: 1px solid var(--border); }\n"
+        << "    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.875rem; }\n"
+        << "    th, td { padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border); }\n"
+        << "    th { background: rgba(0,0,0,0.2); color: var(--text-muted); }\n"
+        << "    .impact-badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }\n"
+        << "    .impact-Critical { background: rgba(248, 113, 113, 0.2); color: var(--danger); }\n"
+        << "    .impact-High { background: rgba(251, 191, 36, 0.2); color: var(--warning); }\n"
+        << "    .impact-Medium { background: rgba(56, 189, 248, 0.2); color: var(--primary); }\n"
+        << "    .impact-Low { background: rgba(148, 163, 184, 0.2); color: var(--text-muted); }\n"
+        << "  </style>\n"
+        << "</head>\n"
+        << "<body>\n"
+        << "  <div class=\"container\">\n"
+        << "    <header>\n"
+        << "      <h1>Azure Cost Anomaly Analysis</h1>\n"
+        << "      <span style=\"color: var(--text-muted); font-size: 0.875rem;\">azdash FinOps Anomaly Detector</span>\n"
+        << "    </header>\n"
+        << "    <div class=\"grid\">\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Verdict</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: " << (assessment.anomalous ? "var(--danger)" : "var(--success)") << ";\">"
+        << (assessment.anomalous ? "ANOMALOUS" : "NORMAL") << "</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Evaluated Total</div>\n"
+        << "        <div class=\"kpi-value\">" << NumberFormatter::money(assessment.evaluated_total) << " " << HtmlTableWriter::escape_html(assessment.currency) << "</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Baseline Mean</div>\n"
+        << "        <div class=\"kpi-value\">" << NumberFormatter::money(assessment.mean) << " " << HtmlTableWriter::escape_html(assessment.currency) << "</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Z-Score</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: " << (assessment.anomalous ? "var(--danger)" : "var(--success)") << ";\">"
+        << NumberFormatter::percent(assessment.zscore) << "</div>\n"
+        << "      </div>\n"
+        << "    </div>\n";
+
+    if (!assessment.root_causes.empty()) {
+      out << "    <div class=\"card\">\n"
+          << "      <div class=\"card-header\">Root Cause Cost Drivers</div>\n"
+          << "      <table>\n"
+          << "        <thead><tr><th>Service</th><th>Baseline Mean</th><th>Current Cost</th><th>Delta</th><th>Change</th><th>Spike Share</th><th>Impact</th></tr></thead>\n"
+          << "        <tbody>\n";
+      for (const auto& rc : assessment.root_causes) {
+        out << "          <tr><td>" << HtmlTableWriter::escape_html(rc.service) << "</td><td>"
+            << NumberFormatter::money(rc.baseline_mean) << " " << HtmlTableWriter::escape_html(rc.currency) << "</td><td>"
+            << NumberFormatter::money(rc.current_cost) << " " << HtmlTableWriter::escape_html(rc.currency) << "</td><td style=\"color: var(--danger);\">+"
+            << NumberFormatter::money(rc.cost_delta) << " " << HtmlTableWriter::escape_html(rc.currency) << "</td><td>+"
+            << NumberFormatter::percent(rc.percentage_change) << "</td><td>"
+            << NumberFormatter::percent(rc.contribution_percent) << "</td><td><span class=\"impact-badge impact-" << rc.impact << "\">"
+            << rc.impact << "</span></td></tr>\n";
+      }
+      out << "        </tbody>\n      </table>\n    </div>\n";
+    }
+    out << "  </div>\n</body>\n</html>\n";
+    return;
+  }
+  case OutputFormat::Table:
+  default:
+    break;
+  }
+
+  // Styled Table:
+  std::vector<std::vector<std::string>> driver_rows{{"Service", "Baseline", "Current", "Spike Delta", "Impact"}};
+  for (const auto& rc : assessment.root_causes) {
+    driver_rows.push_back({
+        rc.service,
+        NumberFormatter::money(rc.baseline_mean) + " " + rc.currency,
+        NumberFormatter::money(rc.current_cost) + " " + rc.currency,
+        "+" + NumberFormatter::money(rc.cost_delta) + " (" + NumberFormatter::percent(rc.contribution_percent) + ")",
+        rc.impact
+    });
+  }
+  if (driver_rows.size() == 1) {
+    driver_rows.push_back({"(None)", "-", "-", "0.00 " + assessment.currency, "Low"});
+  }
+
+  auto summary_header = ftxui::vbox({
+      ftxui::text(assessment.anomalous ? "Anomaly detected: projected end-of-month cost deviates from baseline."
+                                       : "No anomalies detected: projected end-of-month cost is within baseline.") |
+          ftxui::bold | ftxui::color(assessment.anomalous ? ftxui::Color::Red : ftxui::Color::Green),
+      ftxui::hbox({
+          ftxui::text("  projected: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(assessment.evaluated_total) + " " + assessment.currency) | ftxui::bold,
+          ftxui::text("  |  mean: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(assessment.mean) + " " + assessment.currency),
+          ftxui::text("  |  stddev: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(assessment.stddev) + " " + assessment.currency),
+          ftxui::text("  |  z-score: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::percent(assessment.zscore)) | ftxui::bold |
+              ftxui::color(assessment.anomalous ? ftxui::Color::Red : ftxui::Color::Green),
+      }),
+  });
+
+  TerminalTableWriter{}.write(driver_rows, out, summary_header);
+}
+
 void render_help_screen(std::ostream& out) {
   auto document = ftxui::vbox({
                       panel_title("azdash command center"),

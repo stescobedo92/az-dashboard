@@ -222,4 +222,18 @@ auto assess_cost_anomaly(const std::vector<double>& past_totals,
                          double evaluated_total,
                          double zscore_threshold = 2.0) -> CostAnomalyAssessment;
 
+/**
+ * @brief Assesses cost anomaly and attributes root causes across services.
+ * @param past_months Historical closed months with their service breakdowns.
+ * @param current_month Current month containing current service breakdowns.
+ * @param zscore_threshold Absolute z-score treated as anomalous.
+ * @param mode Projection mode to use for evaluating the current month.
+ * @return Assessment with statistics and sorted root cause drivers.
+ */
+auto assess_cost_anomaly_with_attribution(
+    std::span<const MonthCost> past_months,
+    const MonthCost& current_month,
+    double zscore_threshold = 2.0,
+    ProjectionMode mode = ProjectionMode::Linear) -> CostAnomalyAssessment;
+
 } // namespace azdash

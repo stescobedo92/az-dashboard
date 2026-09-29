@@ -73,6 +73,14 @@ void render_commitments(const std::vector<CommitmentRecommendation>& recommendat
 void render_compliance(const TagComplianceSummary& summary, OutputFormat format, std::ostream& out);
 
 /**
+ * @brief Renders cost anomaly assessment and root cause drivers to an output stream.
+ * @param assessment Anomaly assessment and driver details.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_anomaly(const CostAnomalyAssessment& assessment, OutputFormat format, std::ostream& out);
+
+/**
  * @brief Renders interactive help.
  * @param out Output stream.
  */

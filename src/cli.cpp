@@ -265,43 +265,60 @@ auto execute_anomaly(const CliOptions& options, const CliRuntime& runtime) -> in
   const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
   const auto trends = runtime.trend_provider.six_month_trends(resolved_options);
 
-  std::vector<double> past_totals;
-  for (std::size_t index = 0; index + 1 < trends.size(); ++index) {
-    past_totals.push_back(trends[index].total);
+  if (trends.size() < 2) {
+    render_error("Not enough data to detect anomalies (requires at least 2 billing periods).", runtime.err);
+    return 1;
   }
 
-  const auto projected =
-      trends.empty() ? 0.0 : compute_projection(trends.back().total, options.projection_mode, past_totals);
-  const auto assessment = assess_cost_anomaly(past_totals, projected);
+  std::span<const MonthCost> past_months{trends.data(), trends.size() - 1};
+  const MonthCost& current_month = trends.back();
+
+  const auto assessment = assess_cost_anomaly_with_attribution(
+      past_months, current_month, options.anomaly_threshold, options.projection_mode);
+
   if (!assessment.enough_data) {
     render_error("Not enough data to detect anomalies.", runtime.err);
     return 1;
   }
 
-  std::ostringstream message;
-  message << std::fixed << std::setprecision(2);
-  if (assessment.anomalous) {
-    message << "Anomaly detected: projected end-of-month cost " << assessment.evaluated_total
-            << " deviates from the six-month baseline (mean " << assessment.mean << ", stddev "
-            << assessment.stddev << ", z-score " << assessment.zscore << ").";
-  } else {
-    message << "No anomalies detected: projected end-of-month cost " << assessment.evaluated_total
-            << " is within the six-month baseline (mean " << assessment.mean << ", stddev "
-            << assessment.stddev << ", z-score " << assessment.zscore << ").";
-  }
+  render_anomaly(assessment, options.output, runtime.out);
+
   if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    std::ostringstream message;
+    message << std::fixed << std::setprecision(2);
+    if (assessment.anomalous) {
+      message << "Anomaly detected: projected cost " << assessment.evaluated_total << " " << assessment.currency
+              << " deviates from baseline (mean " << assessment.mean << ", z-score " << assessment.zscore << ").";
+      if (!assessment.root_causes.empty()) {
+        message << " Top driver: " << assessment.root_causes.front().service
+                << " (+" << assessment.root_causes.front().cost_delta << " " << assessment.currency
+                << ", " << assessment.root_causes.front().contribution_percent << "% of spike).";
+      }
+    } else {
+      message << "No anomalies detected: projected cost " << assessment.evaluated_total << " " << assessment.currency
+              << " is within baseline (mean " << assessment.mean << ", z-score " << assessment.zscore << ").";
+    }
+
+    std::string details = "Z-Score: " + std::to_string(assessment.zscore);
+    if (!assessment.root_causes.empty()) {
+      details += " | Drivers: " + std::to_string(assessment.root_causes.size());
+    }
+
     if (!runtime.webhook_sender->send(options.webhook_url, WebhookPayload{
         .title = "Azure Cost Anomaly Alert",
         .status = assessment.anomalous ? "warning" : "info",
         .subscription = subscription_label(resolved_options.subscriptions),
         .message = message.str(),
-        .details = "Z-Score: " + std::to_string(assessment.zscore),
+        .details = std::move(details),
     })) {
       runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
     }
   }
 
-  render_success("Cost Anomaly", message.str(), runtime.out);
+  if (options.fail_on_anomaly && assessment.anomalous) {
+    return 2;
+  }
+
   return 0;
 }
 
@@ -324,6 +341,10 @@ auto execute_trend(const CliOptions& options, const CliRuntime& runtime) -> int 
     return "az network route-table delete --ids \"" + finding.resource_id + "\"";
   } else if (finding.resource_type == "Microsoft.Network/natGateways") {
     return "az network nat gateway delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Network/loadBalancers") {
+    return "az network lb delete --ids \"" + finding.resource_id + "\"";
+  } else if (finding.resource_type == "Microsoft.Network/networkInterfaces") {
+    return "az network nic delete --ids \"" + finding.resource_id + "\"";
   } else if (finding.resource_type == "Microsoft.Web/serverfarms") {
     return "az appservice plan delete --ids \"" + finding.resource_id + "\" --yes";
   } else if (finding.resource_type == "Microsoft.Compute/virtualMachines") {
@@ -459,28 +480,34 @@ auto execute_waste(const CliOptions& options, const CliRuntime& runtime) -> int 
         std::filesystem::create_directories(rem_path.parent_path());
       }
       std::ofstream out(rem_path);
-      out << "#!/bin/bash\n\n";
-      for (const auto& finding : findings) {
-          if (finding.resource_type == "Microsoft.Compute/disks") {
-              out << "az disk delete --ids \"" << finding.resource_id << "\" --yes\n";
-          } else if (finding.resource_type == "Microsoft.Network/publicIPAddresses") {
-              out << "az network public-ip delete --ids \"" << finding.resource_id << "\"\n";
-          } else if (finding.resource_type == "Microsoft.Compute/snapshots") {
-              out << "az snapshot delete --ids \"" << finding.resource_id << "\"\n";
-          } else if (finding.resource_type == "Microsoft.Network/networkSecurityGroups") {
-              out << "az network nsg delete --ids \"" << finding.resource_id << "\"\n";
-          } else if (finding.resource_type == "Microsoft.Network/routeTables") {
-              out << "az network route-table delete --ids \"" << finding.resource_id << "\"\n";
-          } else if (finding.resource_type == "Microsoft.Network/natGateways") {
-              out << "az network nat gateway delete --ids \"" << finding.resource_id << "\"\n";
-          } else if (finding.resource_type == "Microsoft.Web/serverfarms") {
-              out << "# az appservice plan delete --ids \"" << finding.resource_id << "\" --yes\n";
+      const bool is_terraform = (options.remediation_format == "terraform" ||
+                                 options.remediation_format == "tf" ||
+                                 rem_path.extension() == ".tf");
+      if (is_terraform) {
+        out << "# AzDash FinOps Automated Waste Remediation Plan (Terraform)\n";
+        out << "# Generated by azdash waste --generate-remediation\n\n";
+        for (const auto& finding : findings) {
+          out << "# Resource: " << finding.name << " (" << finding.resource_type << ")\n";
+          out << "# Recommendation: " << finding.recommendation << "\n";
+          out << "# Monthly Savings: " << finding.estimated_monthly_savings << " " << finding.currency << "\n";
+          out << "removed {\n";
+          out << "  from = \"" << finding.resource_id << "\"\n";
+          out << "  lifecycle {\n";
+          out << "    destroy = true\n";
+          out << "  }\n";
+          out << "}\n\n";
+        }
+      } else {
+        out << "#!/bin/bash\n\n";
+        for (const auto& finding : findings) {
+          if (finding.resource_type == "Microsoft.Web/serverfarms") {
+            out << "# az appservice plan delete --ids \"" << finding.resource_id << "\" --yes\n";
           } else if (finding.resource_type == "Microsoft.Compute/virtualMachines") {
-              out << "# az vm delete --ids \"" << finding.resource_id << "\" --yes\n";
+            out << "# az vm delete --ids \"" << finding.resource_id << "\" --yes\n";
           } else {
-              out << "# Recommendation: " << finding.recommendation << "\n";
-              out << "# az resource delete --ids \"" << finding.resource_id << "\"\n";
+            out << get_remediation_command(finding) << "\n";
           }
+        }
       }
       render_success("Remediation generated", "Remediation script saved to " + options.remediation_path, runtime.out);
   }

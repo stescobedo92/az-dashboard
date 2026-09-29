@@ -140,4 +140,80 @@ TEST(AnalyticsTest, ComputeProjectionWeightedStabilizesWithHistoricalBaseline) {
   EXPECT_DOUBLE_EQ(fallback, linear);
 }
 
+TEST(AnalyticsTest, ComputeProjectionHoltWintersAdaptsTrend) {
+  const std::vector<double> history{100.0, 150.0, 200.0, 250.0};
+  const double proj_hw = azdash::compute_projection(120.0, azdash::ProjectionMode::HoltWinters, history);
+  EXPECT_GT(proj_hw, 120.0);
+
+  // Fallback to linear when fewer than 2 history entries
+  const double fallback_empty = azdash::compute_projection(100.0, azdash::ProjectionMode::HoltWinters, {});
+  const double linear = azdash::compute_projection(100.0, azdash::ProjectionMode::Linear, {});
+  EXPECT_DOUBLE_EQ(fallback_empty, linear);
+
+  const std::vector<double> single_item{200.0};
+  const double fallback_single = azdash::compute_projection(100.0, azdash::ProjectionMode::HoltWinters, single_item);
+  EXPECT_DOUBLE_EQ(fallback_single, linear);
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyWithAttributionIdentifiesDrivers) {
+  const std::vector<azdash::MonthCost> past_months{
+      {.month = "2026-01", .total = 350.0, .services = {{"Virtual Machines", 200.0}, {"Storage", 100.0}, {"Network", 50.0}}, .currency = "USD"},
+      {.month = "2026-02", .total = 350.0, .services = {{"Virtual Machines", 200.0}, {"Storage", 100.0}, {"Network", 50.0}}, .currency = "USD"},
+      {.month = "2026-03", .total = 350.0, .services = {{"Virtual Machines", 200.0}, {"Storage", 100.0}, {"Network", 50.0}}, .currency = "USD"},
+  };
+
+  const azdash::MonthCost current_month{
+      .month = "2026-04",
+      .total = 970.0,
+      .services = {{"Virtual Machines", 800.0}, {"Storage", 120.0}, {"Network", 50.0}},
+      .currency = "USD"
+  };
+
+  const auto assessment = azdash::assess_cost_anomaly_with_attribution(
+      past_months, current_month, 2.0, azdash::ProjectionMode::Linear);
+
+  EXPECT_TRUE(assessment.enough_data);
+  EXPECT_TRUE(assessment.anomalous);
+  EXPECT_EQ(assessment.currency, "USD");
+  ASSERT_EQ(assessment.root_causes.size(), 2u);
+
+  // Top driver: Virtual Machines (+600 USD)
+  EXPECT_EQ(assessment.root_causes[0].service, "Virtual Machines");
+  EXPECT_DOUBLE_EQ(assessment.root_causes[0].current_cost, 800.0);
+  EXPECT_DOUBLE_EQ(assessment.root_causes[0].baseline_mean, 200.0);
+  EXPECT_DOUBLE_EQ(assessment.root_causes[0].cost_delta, 600.0);
+  EXPECT_DOUBLE_EQ(assessment.root_causes[0].percentage_change, 300.0);
+  EXPECT_GT(assessment.root_causes[0].contribution_percent, 90.0);
+  EXPECT_EQ(assessment.root_causes[0].impact, "Critical");
+
+  // Second driver: Storage (+20 USD)
+  EXPECT_EQ(assessment.root_causes[1].service, "Storage");
+  EXPECT_DOUBLE_EQ(assessment.root_causes[1].current_cost, 120.0);
+  EXPECT_DOUBLE_EQ(assessment.root_causes[1].baseline_mean, 100.0);
+  EXPECT_DOUBLE_EQ(assessment.root_causes[1].cost_delta, 20.0);
+  EXPECT_DOUBLE_EQ(assessment.root_causes[1].percentage_change, 20.0);
+  EXPECT_LT(assessment.root_causes[1].contribution_percent, 10.0);
+  EXPECT_EQ(assessment.root_causes[1].impact, "Low");
+}
+
+TEST(AnalyticsTest, AssessCostAnomalyWithAttributionNoSpikeLeavesEmptyDrivers) {
+  const std::vector<azdash::MonthCost> past_months{
+      {.month = "2026-01", .total = 300.0, .services = {{"VMs", 200.0}, {"Storage", 100.0}}},
+      {.month = "2026-02", .total = 300.0, .services = {{"VMs", 200.0}, {"Storage", 100.0}}},
+  };
+
+  const azdash::MonthCost current_month{
+      .month = "2026-03",
+      .total = 250.0,
+      .services = {{"VMs", 150.0}, {"Storage", 100.0}}
+  };
+
+  const auto assessment = azdash::assess_cost_anomaly_with_attribution(
+      past_months, current_month, 2.0, azdash::ProjectionMode::Linear);
+
+  EXPECT_TRUE(assessment.enough_data);
+  EXPECT_FALSE(assessment.anomalous);
+  EXPECT_TRUE(assessment.root_causes.empty());
+}
+
 } // namespace

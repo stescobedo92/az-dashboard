@@ -34,6 +34,31 @@ auto compute_projection(double current_total,
     return linear_projection;
   }
 
+  if (mode == ProjectionMode::HoltWinters) {
+    if (historical_totals.size() < 2) {
+      return linear_projection;
+    }
+    // Holt's linear trend method (double exponential smoothing):
+    constexpr double alpha = 0.5; // Level smoothing parameter
+    constexpr double beta = 0.3;  // Trend smoothing parameter
+
+    double level = historical_totals[0];
+    double trend = historical_totals[1] - historical_totals[0];
+
+    for (std::size_t t = 1; t < historical_totals.size(); ++t) {
+      double prev_level = level;
+      level = alpha * historical_totals[t] + (1.0 - alpha) * (level + trend);
+      trend = beta * (level - prev_level) + (1.0 - beta) * trend;
+    }
+
+    double baseline_forecast = std::max(0.0, level + trend);
+    double p = static_cast<double>(days_elapsed) / static_cast<double>(days_in_month);
+    if (p >= 1.0) {
+      return current_total;
+    }
+    return current_total + (1.0 - p) * baseline_forecast;
+  }
+
   // Weighted projection using Bayesian shrinkage against historical baseline:
   double total_weight = 0.0;
   double weighted_sum = 0.0;
@@ -105,6 +130,102 @@ auto assess_cost_anomaly(const std::vector<double>& past_totals,
   } else {
     assessment.anomalous = evaluated_total > 0.0;
   }
+  return assessment;
+}
+
+auto assess_cost_anomaly_with_attribution(
+    std::span<const MonthCost> past_months,
+    const MonthCost& current_month,
+    double zscore_threshold,
+    ProjectionMode mode) -> CostAnomalyAssessment {
+  std::vector<double> past_totals;
+  past_totals.reserve(past_months.size());
+  for (const auto& m : past_months) {
+    past_totals.push_back(m.total);
+  }
+
+  const double projected = compute_projection(current_month.total, mode, past_totals);
+  auto assessment = assess_cost_anomaly(past_totals, projected, zscore_threshold);
+  assessment.currency = current_month.currency.empty() ? "USD" : current_month.currency;
+
+  if (past_months.empty()) {
+    return assessment;
+  }
+
+  // Calculate historical baseline average per service across past months:
+  std::map<std::string, double> service_sum;
+  for (const auto& m : past_months) {
+    for (const auto& s : m.services) {
+      service_sum[s.service] += s.cost;
+    }
+  }
+
+  const double num_months = static_cast<double>(past_months.size());
+  std::map<std::string, double> service_baseline;
+  for (const auto& [svc, sum] : service_sum) {
+    service_baseline[svc] = sum / num_months;
+  }
+
+  // Current month costs per service:
+  std::map<std::string, double> current_by_service;
+  for (const auto& s : current_month.services) {
+    current_by_service[s.service] += s.cost;
+  }
+
+  // Identify drivers with positive cost deltas (spikes):
+  struct CandidateDriver {
+    std::string service;
+    double current_cost{0.0};
+    double baseline{0.0};
+    double delta{0.0};
+    double pct_change{0.0};
+  };
+
+  std::vector<CandidateDriver> candidates;
+  double total_positive_delta = 0.0;
+
+  for (const auto& [svc, current_cost] : current_by_service) {
+    double base = 0.0;
+    if (auto it = service_baseline.find(svc); it != service_baseline.end()) {
+      base = it->second;
+    }
+    double delta = current_cost - base;
+    if (delta > 0.001) {
+      double pct_change = base > 0.0 ? (delta / base) * 100.0 : 100.0;
+      candidates.push_back({svc, current_cost, base, delta, pct_change});
+      total_positive_delta += delta;
+    }
+  }
+
+  std::ranges::sort(candidates, [](const auto& a, const auto& b) {
+    return a.delta > b.delta;
+  });
+
+  for (const auto& c : candidates) {
+    double contrib = total_positive_delta > 0.0 ? (c.delta / total_positive_delta) * 100.0 : 0.0;
+    std::string impact;
+    if (contrib >= 50.0) {
+      impact = "Critical";
+    } else if (contrib >= 25.0) {
+      impact = "High";
+    } else if (contrib >= 10.0) {
+      impact = "Medium";
+    } else {
+      impact = "Low";
+    }
+
+    assessment.root_causes.push_back(CostAnomalyDriver{
+        .service = c.service,
+        .current_cost = c.current_cost,
+        .baseline_mean = c.baseline,
+        .cost_delta = c.delta,
+        .percentage_change = c.pct_change,
+        .contribution_percent = contrib,
+        .impact = std::move(impact),
+        .currency = assessment.currency,
+    });
+  }
+
   return assessment;
 }
 

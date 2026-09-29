@@ -206,5 +206,29 @@ TEST(CliParserTest, HelpTextAndToStringCoverage) {
   EXPECT_EQ(to_string(OutputFormat::Table), "table");
 }
 
+TEST(CliParserTest, ParsesAnomalyAndRemediationFlags) {
+  const auto opts = parse({
+      "--anomaly-threshold", "2.75",
+      "--fail-on-anomaly",
+      "--remediation-format", "terraform",
+      "--projection", "holt-winters",
+      "anomaly"
+  });
+
+  EXPECT_EQ(opts.command, CommandKind::CostAnomaly);
+  EXPECT_DOUBLE_EQ(opts.anomaly_threshold, 2.75);
+  EXPECT_TRUE(opts.fail_on_anomaly);
+  EXPECT_EQ(opts.remediation_format, "terraform");
+  EXPECT_EQ(opts.projection_mode, ProjectionMode::HoltWinters);
+
+  EXPECT_EQ(parse({"--projection", "exponential", "cost"}).projection_mode, ProjectionMode::HoltWinters);
+  EXPECT_EQ(parse({"--remediation-format", "bicep", "waste"}).remediation_format, "bicep");
+
+  EXPECT_THROW(parse({"--anomaly-threshold", "-1.0", "cost"}), std::invalid_argument);
+  EXPECT_THROW(parse({"--anomaly-threshold", "0", "cost"}), std::invalid_argument);
+  EXPECT_THROW(parse({"--anomaly-threshold", "invalid", "cost"}), std::invalid_argument);
+  EXPECT_THROW(parse({"--remediation-format", "yaml", "cost"}), std::invalid_argument);
+}
+
 } // namespace
 } // namespace azdash

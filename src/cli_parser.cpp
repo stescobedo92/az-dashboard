@@ -143,8 +143,10 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
       options.projection_mode = ProjectionMode::Weighted;
     } else if (val == "linear") {
       options.projection_mode = ProjectionMode::Linear;
+    } else if (val == "holt-winters" || val == "holtwinters" || val == "exponential") {
+      options.projection_mode = ProjectionMode::HoltWinters;
     } else {
-      throw std::invalid_argument("unknown projection mode: " + val + " (expected linear or weighted)");
+      throw std::invalid_argument("unknown projection mode: " + val + " (expected linear, weighted, or holt-winters)");
     }
   } else if (token == "--management-group" || token == "--mg") {
     options.management_group = require_value(args, index, token);
@@ -178,6 +180,20 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     options.min_compliance_percent = parse_double(args, index, token);
   } else if (token == "--config") {
     options.config_path = require_value(args, index, token);
+  } else if (token == "--anomaly-threshold") {
+    options.anomaly_threshold = parse_double(args, index, token);
+    if (options.anomaly_threshold <= 0.0) {
+      throw std::invalid_argument("--anomaly-threshold must be positive");
+    }
+  } else if (token == "--fail-on-anomaly") {
+    options.fail_on_anomaly = true;
+  } else if (token == "--remediation-format") {
+    const auto fmt = require_value(args, index, token);
+    if (fmt == "bash" || fmt == "sh" || fmt == "terraform" || fmt == "tf" || fmt == "bicep") {
+      options.remediation_format = fmt;
+    } else {
+      throw std::invalid_argument("unsupported remediation format: " + fmt + " (expected bash, terraform, or bicep)");
+    }
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -399,9 +415,12 @@ Global flags:
   --group-by <service|resource-group> Cost aggregation dimension. Defaults to service.
   --group-by-tag <key>                Group costs by a specific Azure tag (overrides --group-by).
   --filter-tag <key=value>            Filter costs by Azure tag.
-  --generate-remediation <path>       Generate a bash script to remediate waste findings.
+  --generate-remediation <path>       Generate a script or IaC file to remediate waste findings.
+  --remediation-format <bash|terraform|bicep> Format for generated remediation (defaults to bash).
   -i, --interactive                   Review waste findings and apply remediations interactively.
-  --projection <linear|weighted>      Cost projection model (linear or weighted by past trends). Defaults to linear.
+  --projection <linear|weighted|holt-winters> Cost projection model. Defaults to linear.
+  --anomaly-threshold <float>         Z-Score threshold for cost anomaly detection (default: 2.0).
+  --fail-on-anomaly                   Return exit code 2 if an anomaly is detected.
   --function-memory-threshold <pct>   Compatibility threshold for function checks.
   --secrets-idle-days <days>          Compatibility threshold for secret checks.
   --fail-if-exceeds <cost>            Return exit code 2 if total cost exceeds this amount.

@@ -172,6 +172,45 @@ TEST(WasteHeuristicsTest, DetectsNewWasteResourceTypes) {
   EXPECT_TRUE(findings[4].recommendation.find("App Service Plan has 0 hosted apps") != std::string::npos);
 }
 
+TEST(WasteHeuristicsTest, DetectsUnattachedLoadBalancersAndNics) {
+  const std::string resources_json = R"([
+    {
+      "id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb-idle",
+      "name": "lb-idle",
+      "type": "Microsoft.Network/loadBalancers",
+      "location": "eastus",
+      "properties": {"backendAddressPools": []}
+    },
+    {
+      "id": "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic-orphaned",
+      "name": "nic-orphaned",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "eastus",
+      "properties": {"virtualMachine": null}
+    }
+  ])";
+
+  auto runner = std::make_shared<FakeScriptRunner>(std::vector<azdash::CommandResult>{
+      {0, "[]", ""},
+      {0, resources_json, ""},
+      {0, "[]", ""},
+  });
+
+  azdash::AzureCliClient client(runner);
+  azdash::CliOptions options;
+  options.subscriptions = {"sub-1"};
+
+  const auto findings = client.waste_findings(options);
+  ASSERT_EQ(findings.size(), 2u);
+
+  EXPECT_EQ(findings[0].name, "lb-idle");
+  EXPECT_DOUBLE_EQ(findings[0].estimated_monthly_savings, 18.00);
+  EXPECT_TRUE(findings[0].recommendation.find("Load Balancer has no backend address pools") != std::string::npos);
+
+  EXPECT_EQ(findings[1].name, "nic-orphaned");
+  EXPECT_TRUE(findings[1].recommendation.find("Network Interface is not attached to any virtual machine") != std::string::npos);
+}
+
 class FakeWasteRuntime final : public azdash::ICliAccountProvider,
                               public azdash::ICliCostProvider,
                               public azdash::ICliTrendProvider,
@@ -242,6 +281,34 @@ TEST(CliWasteRemediationTest, GeneratesDeleteCommandsForNewResourceTypes) {
   EXPECT_TRUE(content.find("az network route-table delete --ids \"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/routeTables/rt1\"") != std::string::npos);
   EXPECT_TRUE(content.find("az network nat gateway delete --ids \"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/natGateways/nat1\"") != std::string::npos);
   EXPECT_TRUE(content.find("# az appservice plan delete --ids \"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/serverfarms/asp1\" --yes") != std::string::npos);
+
+  std::filesystem::remove_all(script_path.parent_path());
+}
+
+TEST(CliWasteRemediationTest, GeneratesTerraformRemediationPlan) {
+  const auto script_path = std::filesystem::temp_directory_path() / "azdash-test-tf" / "remediation.tf";
+  std::filesystem::remove_all(script_path.parent_path());
+
+  FakeWasteRuntime fake_runtime;
+  azdash::CliOptions options;
+  options.command = azdash::CommandKind::Waste;
+  options.remediation_path = script_path.string();
+  options.remediation_format = "terraform";
+
+  const auto exit_code = azdash::run(options, fake_runtime.runtime());
+  EXPECT_EQ(exit_code, 0);
+
+  ASSERT_TRUE(std::filesystem::exists(script_path));
+  std::string content;
+  {
+    std::ifstream file(script_path);
+    content.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+  }
+
+  EXPECT_TRUE(content.find("# AzDash FinOps Automated Waste Remediation Plan (Terraform)") != std::string::npos);
+  EXPECT_TRUE(content.find("removed {") != std::string::npos);
+  EXPECT_TRUE(content.find("destroy = true") != std::string::npos);
+  EXPECT_TRUE(content.find("/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkSecurityGroups/nsg1") != std::string::npos);
 
   std::filesystem::remove_all(script_path.parent_path());
 }
