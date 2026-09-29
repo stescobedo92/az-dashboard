@@ -127,10 +127,12 @@ if(AZ_DASHBOARD_BUILD_TESTS)
 
   add_executable(az-dashboard-tests
     tests/analytics_test.cpp
+    tests/audit_test.cpp
     tests/azure_cli_test.cpp
     tests/azure_rest_test.cpp
     tests/budget_test.cpp
     tests/cache_test.cpp
+    tests/carbon_test.cpp
     tests/cli_parser_test.cpp
     tests/cli_test.cpp
     tests/commitments_test.cpp

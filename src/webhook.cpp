@@ -112,6 +112,88 @@ auto make_compliance_webhook_payload(const TagComplianceSummary& summary,
   };
 }
 
+auto make_audit_webhook_payload(const FinOpsAuditReport& report,
+                                const CliOptions& options) -> WebhookPayload {
+  std::string status = "info";
+  if (report.overall_score < 50.0 || report.grade == "F") {
+    status = "danger";
+  } else if (report.overall_score < 80.0 || report.grade == "C" || report.grade == "D") {
+    status = "warning";
+  }
+
+  std::ostringstream msg;
+  msg << std::fixed << std::setprecision(1);
+  msg << "FinOps Maturity Score: " << report.overall_score << "% (Grade: " << report.grade
+      << " | Stage: " << report.maturity_stage << "). Spend: " << std::fixed << std::setprecision(2)
+      << report.total_spend << " " << report.currency << ", Savings: " << report.potential_savings
+      << " " << report.currency;
+
+  std::ostringstream details;
+  details << "Pillars: ";
+  bool first = true;
+  for (const auto& p : report.pillars) {
+    if (!first) details << " | ";
+    details << p.name << ": " << std::fixed << std::setprecision(0) << p.score << "% (" << p.status << ")";
+    first = false;
+  }
+
+  std::string sub_label = "All subscriptions";
+  if (!options.subscriptions.empty()) {
+    sub_label = options.subscriptions.front();
+    if (options.subscriptions.size() > 1) {
+      sub_label += " (+" + std::to_string(options.subscriptions.size() - 1) + " more)";
+    }
+  }
+
+  return WebhookPayload{
+      .title = "FinOps Maturity Governance Audit Alert",
+      .status = std::move(status),
+      .subscription = std::move(sub_label),
+      .message = msg.str(),
+      .details = details.str(),
+  };
+}
+
+auto make_carbon_webhook_payload(const CarbonFootprintAssessment& assessment,
+                                 const CliOptions& options) -> WebhookPayload {
+  std::string status = "info";
+  if (options.fail_if_carbon_exceeds.has_value() &&
+      assessment.total_emissions_mt > *options.fail_if_carbon_exceeds) {
+    status = "danger";
+  } else if (assessment.avoidable_emissions_percentage > 20.0) {
+    status = "warning";
+  }
+
+  std::ostringstream msg;
+  msg << std::fixed << std::setprecision(2);
+  msg << "GreenOps Carbon Footprint: " << assessment.total_emissions_mt << " MT CO2e ("
+      << assessment.total_emissions_kg << " kg CO2e) in region " << assessment.region
+      << ". Energy: " << assessment.total_energy_kwh << " kWh.";
+
+  std::ostringstream details;
+  details << std::fixed << std::setprecision(1);
+  details << "Avoidable waste carbon: " << assessment.avoidable_emissions_kg << " kg ("
+          << assessment.avoidable_emissions_percentage << "%). Equivalent to "
+          << std::setprecision(2) << assessment.equivalent_cars_per_year
+          << " cars/year or " << assessment.equivalent_tree_seedlings << " tree seedlings.";
+
+  std::string sub_label = "All subscriptions";
+  if (!options.subscriptions.empty()) {
+    sub_label = options.subscriptions.front();
+    if (options.subscriptions.size() > 1) {
+      sub_label += " (+" + std::to_string(options.subscriptions.size() - 1) + " more)";
+    }
+  }
+
+  return WebhookPayload{
+      .title = "GreenOps Cloud Carbon Footprint Alert",
+      .status = std::move(status),
+      .subscription = std::move(sub_label),
+      .message = msg.str(),
+      .details = details.str(),
+  };
+}
+
 DefaultWebhookSender::DefaultWebhookSender()
     : runner_(std::make_shared<ShellCommandRunner>()) {}
 

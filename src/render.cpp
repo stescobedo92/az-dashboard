@@ -1354,6 +1354,404 @@ void render_anomaly(const CostAnomalyAssessment& assessment, OutputFormat format
   TerminalTableWriter{}.write(driver_rows, out, summary_header);
 }
 
+void render_audit(const FinOpsAuditReport& report, OutputFormat format, std::ostream& out) {
+  switch (format) {
+  case OutputFormat::Json: {
+    nlohmann::json payload;
+    payload["overallScore"] = report.overall_score;
+    payload["maturityStage"] = report.maturity_stage;
+    payload["grade"] = report.grade;
+    payload["totalSpend"] = report.total_spend;
+    payload["potentialSavings"] = report.potential_savings;
+    payload["currency"] = report.currency;
+
+    nlohmann::json pillars = nlohmann::json::array();
+    for (const auto& p : report.pillars) {
+      pillars.push_back({
+          {"name", p.name},
+          {"score", p.score},
+          {"weight", p.weight},
+          {"status", p.status},
+          {"summary", p.summary},
+          {"recommendations", p.recommendations},
+      });
+    }
+    payload["pillars"] = pillars;
+    payload["keyTakeaways"] = report.key_takeaways;
+    out << payload.dump(2) << '\n';
+    return;
+  }
+  case OutputFormat::Csv: {
+    CsvDocumentWriter csv(out);
+    csv.header("pillar,score,weight,status,summary");
+    for (const auto& p : report.pillars) {
+      csv.row([&p](CsvRowWriter& w) {
+        w.escaped_cell(p.name);
+        w.raw_cell(NumberFormatter::percent(p.score));
+        w.raw_cell(NumberFormatter::percent(p.weight * 100.0));
+        w.escaped_cell(p.status);
+        w.escaped_cell(p.summary);
+      });
+    }
+    csv.row([&report](CsvRowWriter& w) {
+      w.escaped_cell("Overall Score");
+      w.raw_cell(NumberFormatter::percent(report.overall_score));
+      w.raw_cell("100.0%");
+      w.escaped_cell(report.grade);
+      w.escaped_cell("Stage: " + report.maturity_stage);
+    });
+    return;
+  }
+  case OutputFormat::Markdown: {
+    out << "# FinOps Maturity Scorecard & Governance Audit\n\n"
+        << "**Overall Score:** " << NumberFormatter::percent(report.overall_score)
+        << " (Grade: **" << report.grade << "** | Stage: **" << report.maturity_stage << "**)\n\n"
+        << "**Total Monthly Spend:** " << NumberFormatter::money(report.total_spend) << " " << report.currency
+        << " | **Identified Savings Potential:** " << NumberFormatter::money(report.potential_savings) << " " << report.currency << "\n\n";
+
+    std::vector<std::vector<std::string>> md_rows{{"Pillar", "Weight", "Score", "Status", "Assessment"}};
+    for (const auto& p : report.pillars) {
+      md_rows.push_back({
+          p.name,
+          NumberFormatter::percent(p.weight * 100.0),
+          NumberFormatter::percent(p.score),
+          p.status,
+          p.summary,
+      });
+    }
+    MarkdownTableWriter{}.write(md_rows, out);
+    out << "\n";
+    if (!report.key_takeaways.empty()) {
+      out << "### Key Recommendations\n\n";
+      for (const auto& tip : report.key_takeaways) {
+        out << "- " << tip << "\n";
+      }
+      out << "\n";
+    }
+    return;
+  }
+  case OutputFormat::Html: {
+    out << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        << "  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        << "  <title>FinOps Maturity Scorecard</title>\n"
+        << "  <style>\n"
+        << "    :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --muted: #94a3b8; --border: #334155; --accent: #38bdf8; --success: #22c55e; --warning: #f59e0b; --danger: #ef4444; }\n"
+        << "    body { margin: 0; padding: 24px; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); }\n"
+        << "    .container { max-width: 1000px; margin: 0 auto; }\n"
+        << "    h1 { margin-top: 0; font-size: 1.6rem; color: #fff; }\n"
+        << "    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }\n"
+        << "    .kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }\n"
+        << "    .kpi-title { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }\n"
+        << "    .kpi-value { font-size: 1.6rem; font-weight: 700; margin-top: 6px; }\n"
+        << "    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; overflow: hidden; }\n"
+        << "    .card-header { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 1rem; }\n"
+        << "    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem; }\n"
+        << "    th, td { padding: 12px 16px; border-bottom: 1px solid var(--border); }\n"
+        << "    th { background: rgba(0,0,0,0.2); color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }\n"
+        << "    .status-badge { padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; display: inline-block; }\n"
+        << "    .status-Healthy { background: rgba(34, 197, 94, 0.15); color: var(--success); }\n"
+        << "    .status-Warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); }\n"
+        << "    .status-Critical { background: rgba(239, 68, 68, 0.15); color: var(--danger); }\n"
+        << "    .tips { padding: 16px 20px; line-height: 1.6; color: #cbd5e1; }\n"
+        << "  </style>\n</head>\n<body>\n  <div class=\"container\">\n"
+        << "    <h1>FinOps Foundation Maturity Scorecard</h1>\n"
+        << "    <div class=\"kpi-grid\">\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Overall Score</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: "
+        << (report.overall_score >= 80 ? "var(--success)" : (report.overall_score >= 50 ? "var(--warning)" : "var(--danger)"))
+        << ";\">" << NumberFormatter::percent(report.overall_score) << " (" << report.grade << ")</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Maturity Stage</div>\n"
+        << "        <div class=\"kpi-value\">" << report.maturity_stage << "</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Monthly Spend</div>\n"
+        << "        <div class=\"kpi-value\">" << NumberFormatter::money(report.total_spend) << " " << HtmlTableWriter::escape_html(report.currency) << "</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Savings Potential</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: var(--accent);\">"
+        << NumberFormatter::money(report.potential_savings) << " " << HtmlTableWriter::escape_html(report.currency) << "</div>\n"
+        << "      </div>\n"
+        << "    </div>\n"
+        << "    <div class=\"card\">\n"
+        << "      <div class=\"card-header\">FinOps Pillar Breakdown</div>\n"
+        << "      <table>\n"
+        << "        <thead><tr><th>Pillar</th><th>Weight</th><th>Score</th><th>Status</th><th>Assessment</th></tr></thead>\n"
+        << "        <tbody>\n";
+    for (const auto& p : report.pillars) {
+      out << "          <tr><td>" << HtmlTableWriter::escape_html(p.name) << "</td><td>"
+          << NumberFormatter::percent(p.weight * 100.0) << "</td><td>"
+          << NumberFormatter::percent(p.score) << "</td><td><span class=\"status-badge status-" << p.status << "\">"
+          << p.status << "</span></td><td>" << HtmlTableWriter::escape_html(p.summary) << "</td></tr>\n";
+    }
+    out << "        </tbody>\n      </table>\n    </div>\n";
+    if (!report.key_takeaways.empty()) {
+      out << "    <div class=\"card\">\n"
+          << "      <div class=\"card-header\">Key Recommendations</div>\n"
+          << "      <div class=\"tips\"><ul>\n";
+      for (const auto& tip : report.key_takeaways) {
+        out << "        <li>" << HtmlTableWriter::escape_html(tip) << "</li>\n";
+      }
+      out << "      </ul></div>\n    </div>\n";
+    }
+    out << "  </div>\n</body>\n</html>\n";
+    return;
+  }
+  case OutputFormat::Table:
+  default:
+    break;
+  }
+
+  // Styled FTXUI Terminal Table
+  std::vector<std::vector<std::string>> rows{{"Pillar", "Weight", "Score", "Status", "Summary"}};
+  for (const auto& p : report.pillars) {
+    rows.push_back({
+        p.name,
+        NumberFormatter::percent(p.weight * 100.0),
+        NumberFormatter::percent(p.score),
+        p.status,
+        p.summary,
+    });
+  }
+
+  const auto header = ftxui::vbox({
+      ftxui::hbox({
+          ftxui::text(" FinOps Maturity Scorecard: ") | ftxui::bold | ftxui::color(ftxui::Color::White),
+          ftxui::text(NumberFormatter::percent(report.overall_score)) | ftxui::bold |
+              ftxui::color(report.overall_score >= 80 ? ftxui::Color::Green
+                                                     : (report.overall_score >= 50 ? ftxui::Color::Yellow : ftxui::Color::Red)),
+          ftxui::text(" (Grade: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(report.grade) | ftxui::bold | ftxui::color(ftxui::Color::Cyan),
+          ftxui::text(" | Stage: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(report.maturity_stage) | ftxui::bold | ftxui::color(ftxui::Color::Yellow),
+          ftxui::text(") "),
+      }),
+      ftxui::hbox({
+          ftxui::text("  Spend: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(report.total_spend) + " " + report.currency) | ftxui::bold,
+          ftxui::text("  |  Savings Opportunity: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(report.potential_savings) + " " + report.currency) | ftxui::bold |
+              ftxui::color(ftxui::Color::Green),
+      }),
+  });
+
+  TerminalTableWriter{}.write(rows, out, header);
+  if (!report.key_takeaways.empty()) {
+    out << "\n  Key Recommendations:\n";
+    for (const auto& tip : report.key_takeaways) {
+      out << "   * " << tip << "\n";
+    }
+    out << "\n";
+  }
+}
+
+void render_carbon(const CarbonFootprintAssessment& assessment, OutputFormat format, std::ostream& out) {
+  switch (format) {
+  case OutputFormat::Json: {
+    nlohmann::json payload;
+    payload["region"] = assessment.region;
+    payload["totalEmissionsKg"] = assessment.total_emissions_kg;
+    payload["totalEmissionsMt"] = assessment.total_emissions_mt;
+    payload["scope2LocationBasedKg"] = assessment.scope2_location_based_kg;
+    payload["scope2MarketBasedKg"] = assessment.scope2_market_based_kg;
+    payload["scope3EmbodiedKg"] = assessment.scope3_embodied_kg;
+    payload["totalEnergyKwh"] = assessment.total_energy_kwh;
+    payload["avoidableEmissionsKg"] = assessment.avoidable_emissions_kg;
+    payload["avoidableEmissionsPercentage"] = assessment.avoidable_emissions_percentage;
+    payload["equivalentCarsPerYear"] = assessment.equivalent_cars_per_year;
+    payload["equivalentTreeSeedlings"] = assessment.equivalent_tree_seedlings;
+
+    nlohmann::json services = nlohmann::json::array();
+    for (const auto& s : assessment.services) {
+      services.push_back({
+          {"service", s.service},
+          {"cost", s.cost},
+          {"energyKwh", s.energy_kwh},
+          {"emissionsKg", s.emissions_kg},
+          {"embodiedEmissionsKg", s.embodied_emissions_kg},
+          {"totalEmissionsKg", s.total_emissions_kg},
+      });
+    }
+    payload["services"] = services;
+    payload["sustainabilityTips"] = assessment.sustainability_tips;
+    out << payload.dump(2) << '\n';
+    return;
+  }
+  case OutputFormat::Csv: {
+    CsvDocumentWriter csv(out);
+    csv.header("service,cost,energy_kwh,scope2_kg,scope3_kg,total_emissions_kg");
+    for (const auto& s : assessment.services) {
+      csv.row([&s](CsvRowWriter& w) {
+        w.escaped_cell(s.service);
+        w.raw_cell(NumberFormatter::money(s.cost));
+        w.raw_cell(NumberFormatter::money(s.energy_kwh));
+        w.raw_cell(NumberFormatter::money(s.emissions_kg));
+        w.raw_cell(NumberFormatter::money(s.embodied_emissions_kg));
+        w.raw_cell(NumberFormatter::money(s.total_emissions_kg));
+      });
+    }
+    csv.row([&assessment](CsvRowWriter& w) {
+      w.escaped_cell("Total (" + assessment.region + ")");
+      w.raw_cell("-");
+      w.raw_cell(NumberFormatter::money(assessment.total_energy_kwh));
+      w.raw_cell(NumberFormatter::money(assessment.scope2_location_based_kg));
+      w.raw_cell(NumberFormatter::money(assessment.scope3_embodied_kg));
+      w.raw_cell(NumberFormatter::money(assessment.total_emissions_kg));
+    });
+    return;
+  }
+  case OutputFormat::Markdown: {
+    out << "# Cloud Sustainability & Carbon Footprint Report\n\n"
+        << "**Total Carbon Footprint:** " << NumberFormatter::money(assessment.total_emissions_mt) << " MT CO2e ("
+        << NumberFormatter::money(assessment.total_emissions_kg) << " kg CO2e) | **Region:** `" << assessment.region << "`\n\n"
+        << "**Energy Consumption:** " << NumberFormatter::money(assessment.total_energy_kwh) << " kWh | "
+        << "**Avoidable Waste Carbon:** " << NumberFormatter::money(assessment.avoidable_emissions_kg) << " kg CO2e ("
+        << NumberFormatter::percent(assessment.avoidable_emissions_percentage) << ")\n\n"
+        << "> **Equivalency:** Equivalent to driving **" << NumberFormatter::money(assessment.equivalent_cars_per_year)
+        << "** passenger vehicles for 1 year, or carbon sequestered by **"
+        << NumberFormatter::money(assessment.equivalent_tree_seedlings) << "** tree seedlings grown for 10 years.\n\n";
+
+    std::vector<std::vector<std::string>> md_rows{{"Service", "Cost", "Energy (kWh)", "Scope 2 (kg)", "Scope 3 (kg)", "Total (kg CO2e)"}};
+    for (const auto& s : assessment.services) {
+      md_rows.push_back({
+          s.service,
+          NumberFormatter::money(s.cost),
+          NumberFormatter::money(s.energy_kwh),
+          NumberFormatter::money(s.emissions_kg),
+          NumberFormatter::money(s.embodied_emissions_kg),
+          NumberFormatter::money(s.total_emissions_kg),
+      });
+    }
+    MarkdownTableWriter{}.write(md_rows, out);
+    out << "\n";
+    if (!assessment.sustainability_tips.empty()) {
+      out << "### Sustainability Recommendations\n\n";
+      for (const auto& tip : assessment.sustainability_tips) {
+        out << "- " << tip << "\n";
+      }
+      out << "\n";
+    }
+    return;
+  }
+  case OutputFormat::Html: {
+    out << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n"
+        << "  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+        << "  <title>Cloud Carbon Footprint Report</title>\n"
+        << "  <style>\n"
+        << "    :root { --bg: #064e3b; --bg-page: #022c22; --card: #065f46; --text: #f0fdf4; --muted: #a7f3d0; --border: #047857; --accent: #34d399; --highlight: #6ee7b7; }\n"
+        << "    body { margin: 0; padding: 24px; font-family: system-ui, -apple-system, sans-serif; background: var(--bg-page); color: var(--text); }\n"
+        << "    .container { max-width: 1000px; margin: 0 auto; }\n"
+        << "    h1 { margin-top: 0; font-size: 1.6rem; color: #fff; }\n"
+        << "    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }\n"
+        << "    .kpi-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }\n"
+        << "    .kpi-title { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }\n"
+        << "    .kpi-value { font-size: 1.6rem; font-weight: 700; margin-top: 6px; color: var(--highlight); }\n"
+        << "    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 24px; overflow: hidden; }\n"
+        << "    .card-header { padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 1rem; }\n"
+        << "    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem; }\n"
+        << "    th, td { padding: 12px 16px; border-bottom: 1px solid var(--border); }\n"
+        << "    th { background: rgba(0,0,0,0.2); color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }\n"
+        << "    .tips { padding: 16px 20px; line-height: 1.6; color: #d1fae5; }\n"
+        << "  </style>\n</head>\n<body>\n  <div class=\"container\">\n"
+        << "    <h1>GreenOps Cloud Carbon Footprint</h1>\n"
+        << "    <div class=\"kpi-grid\">\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Total Emissions</div>\n"
+        << "        <div class=\"kpi-value\">" << NumberFormatter::money(assessment.total_emissions_mt) << " MT</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Energy Consumed</div>\n"
+        << "        <div class=\"kpi-value\">" << NumberFormatter::money(assessment.total_energy_kwh) << " kWh</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Avoidable Waste Carbon</div>\n"
+        << "        <div class=\"kpi-value\" style=\"color: #fef08a;\">" << NumberFormatter::money(assessment.avoidable_emissions_kg) << " kg</div>\n"
+        << "      </div>\n"
+        << "      <div class=\"kpi-card\">\n"
+        << "        <div class=\"kpi-title\">Azure Region</div>\n"
+        << "        <div class=\"kpi-value\" style=\"font-size: 1.3rem;\">" << HtmlTableWriter::escape_html(assessment.region) << "</div>\n"
+        << "      </div>\n"
+        << "    </div>\n"
+        << "    <div class=\"card\">\n"
+        << "      <div class=\"card-header\">Emissions Breakdown by Service</div>\n"
+        << "      <table>\n"
+        << "        <thead><tr><th>Service</th><th>Cost</th><th>Energy (kWh)</th><th>Scope 2 (kg)</th><th>Scope 3 (kg)</th><th>Total (kg CO2e)</th></tr></thead>\n"
+        << "        <tbody>\n";
+    for (const auto& s : assessment.services) {
+      out << "          <tr><td>" << HtmlTableWriter::escape_html(s.service) << "</td><td>"
+          << NumberFormatter::money(s.cost) << "</td><td>"
+          << NumberFormatter::money(s.energy_kwh) << "</td><td>"
+          << NumberFormatter::money(s.emissions_kg) << "</td><td>"
+          << NumberFormatter::money(s.embodied_emissions_kg) << "</td><td style=\"font-weight: 600;\">"
+          << NumberFormatter::money(s.total_emissions_kg) << "</td></tr>\n";
+    }
+    out << "        </tbody>\n      </table>\n    </div>\n";
+    if (!assessment.sustainability_tips.empty()) {
+      out << "    <div class=\"card\">\n"
+          << "      <div class=\"card-header\">Sustainability Insights</div>\n"
+          << "      <div class=\"tips\"><ul>\n";
+      for (const auto& tip : assessment.sustainability_tips) {
+        out << "        <li>" << HtmlTableWriter::escape_html(tip) << "</li>\n";
+      }
+      out << "      </ul></div>\n    </div>\n";
+    }
+    out << "  </div>\n</body>\n</html>\n";
+    return;
+  }
+  case OutputFormat::Table:
+  default:
+    break;
+  }
+
+  // Styled Table:
+  std::vector<std::vector<std::string>> rows{{"Service", "Cost", "Energy (kWh)", "Scope 2 (kg)", "Scope 3 (kg)", "Total CO2e (kg)"}};
+  for (const auto& s : assessment.services) {
+    rows.push_back({
+        s.service,
+        NumberFormatter::money(s.cost),
+        NumberFormatter::money(s.energy_kwh),
+        NumberFormatter::money(s.emissions_kg),
+        NumberFormatter::money(s.embodied_emissions_kg),
+        NumberFormatter::money(s.total_emissions_kg),
+    });
+  }
+  if (rows.size() == 1) {
+    rows.push_back({"(None)", "0.00", "0.00", "0.00", "0.00", "0.00"});
+  }
+
+  auto summary_header = ftxui::vbox({
+      ftxui::hbox({
+          ftxui::text(" GreenOps Carbon Footprint: ") | ftxui::bold | ftxui::color(ftxui::Color::White),
+          ftxui::text(NumberFormatter::money(assessment.total_emissions_mt) + " MT CO2e") | ftxui::bold |
+              ftxui::color(ftxui::Color::Green),
+          ftxui::text(" (" + NumberFormatter::money(assessment.total_emissions_kg) + " kg CO2e)") |
+              ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text("  |  Region: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(assessment.region) | ftxui::bold | ftxui::color(ftxui::Color::Cyan),
+      }),
+      ftxui::hbox({
+          ftxui::text("  Energy: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(assessment.total_energy_kwh) + " kWh") | ftxui::bold,
+          ftxui::text("  |  Avoidable Waste Carbon: ") | ftxui::color(ftxui::Color::GrayLight),
+          ftxui::text(NumberFormatter::money(assessment.avoidable_emissions_kg) + " kg (" +
+                      NumberFormatter::percent(assessment.avoidable_emissions_percentage) + ")") |
+              ftxui::bold | ftxui::color(ftxui::Color::Yellow),
+      }),
+  });
+
+  TerminalTableWriter{}.write(rows, out, summary_header);
+  if (!assessment.sustainability_tips.empty()) {
+    out << "\n  Sustainability Insights:\n";
+    for (const auto& tip : assessment.sustainability_tips) {
+      out << "   * " << tip << "\n";
+    }
+    out << "\n";
+  }
+}
+
 void render_help_screen(std::ostream& out) {
   auto document = ftxui::vbox({
                       panel_title("azdash command center"),

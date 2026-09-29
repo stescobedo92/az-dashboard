@@ -42,7 +42,9 @@ enum class CommandKind {
   UI,
   Budget,
   Commitments,
-  Compliance
+  Compliance,
+  Audit,
+  Carbon
 };
 
 /**
@@ -118,6 +120,9 @@ struct CliOptions {
   double anomaly_threshold{2.0};
   bool fail_on_anomaly{false};
   std::string remediation_format{"bash"};
+  double min_audit_score{0.0};
+  std::optional<double> fail_if_carbon_exceeds;
+  std::string default_region{"eastus"};
 };
 
 // Azure analysis domain models.
@@ -284,6 +289,64 @@ struct TagComplianceSummary {
   std::map<std::string, std::size_t> missing_tag_counts;
   std::map<std::string, double> missing_tag_costs;
   std::vector<ResourceComplianceItem> non_compliant_items;
+};
+
+/**
+ * @brief Assessment of a single FinOps capability pillar.
+ */
+struct FinOpsPillarScore {
+  std::string name;
+  double score{0.0}; // 0 - 100
+  double weight{0.2}; // Weight in overall score
+  std::string status; // "Healthy", "Warning", "Critical"
+  std::string summary;
+  std::vector<std::string> recommendations;
+};
+
+/**
+ * @brief Complete FinOps Foundation maturity scorecard and governance audit.
+ */
+struct FinOpsAuditReport {
+  double overall_score{0.0}; // 0 - 100
+  std::string maturity_stage; // "Crawl", "Walk", "Run"
+  std::string grade; // "A+", "A", "B", "C", "D", "F"
+  double total_spend{0.0};
+  double potential_savings{0.0};
+  std::string currency{"USD"};
+  std::vector<FinOpsPillarScore> pillars;
+  std::vector<std::string> key_takeaways;
+};
+
+/**
+ * @brief Carbon footprint and energy consumption breakdown for an Azure service.
+ */
+struct ServiceCarbonItem {
+  std::string service;
+  double cost{0.0};
+  double energy_kwh{0.0};
+  double emissions_kg{0.0};
+  double embodied_emissions_kg{0.0};
+  double total_emissions_kg{0.0};
+  double avoidable_carbon_kg{0.0};
+};
+
+/**
+ * @brief Enterprise GreenOps carbon footprint assessment and avoidance model.
+ */
+struct CarbonFootprintAssessment {
+  double total_emissions_kg{0.0};
+  double total_emissions_mt{0.0}; // Metric tons CO2e
+  double scope2_location_based_kg{0.0};
+  double scope2_market_based_kg{0.0};
+  double scope3_embodied_kg{0.0};
+  double total_energy_kwh{0.0};
+  double avoidable_emissions_kg{0.0};
+  double avoidable_emissions_percentage{0.0};
+  double equivalent_cars_per_year{0.0};
+  double equivalent_tree_seedlings{0.0};
+  std::string region{"eastus"};
+  std::vector<ServiceCarbonItem> services;
+  std::vector<std::string> sustainability_tips;
 };
 
 // External process execution models.

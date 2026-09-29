@@ -52,6 +52,18 @@ public:
                                                    const CliOptions& options) -> WebhookPayload;
 
 /**
+ * @brief Formats a WebhookPayload for FinOps audit scorecard alerts.
+ */
+[[nodiscard]] auto make_audit_webhook_payload(const FinOpsAuditReport& report,
+                                              const CliOptions& options) -> WebhookPayload;
+
+/**
+ * @brief Formats a WebhookPayload for GreenOps carbon footprint alerts.
+ */
+[[nodiscard]] auto make_carbon_webhook_payload(const CarbonFootprintAssessment& assessment,
+                                               const CliOptions& options) -> WebhookPayload;
+
+/**
  * @brief Default CLI webhook sender implementing IWebhookSender.
  */
 class DefaultWebhookSender final : public IWebhookSender {

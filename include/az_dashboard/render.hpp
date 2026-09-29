@@ -81,6 +81,22 @@ void render_compliance(const TagComplianceSummary& summary, OutputFormat format,
 void render_anomaly(const CostAnomalyAssessment& assessment, OutputFormat format, std::ostream& out);
 
 /**
+ * @brief Renders FinOps maturity scorecard and audit assessment to an output stream.
+ * @param report FinOps audit report.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_audit(const FinOpsAuditReport& report, OutputFormat format, std::ostream& out);
+
+/**
+ * @brief Renders GreenOps carbon footprint assessment to an output stream.
+ * @param assessment Carbon footprint assessment.
+ * @param format Desired output format.
+ * @param out Output stream.
+ */
+void render_carbon(const CarbonFootprintAssessment& assessment, OutputFormat format, std::ostream& out);
+
+/**
  * @brief Renders interactive help.
  * @param out Output stream.
  */

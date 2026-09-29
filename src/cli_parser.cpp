@@ -194,6 +194,18 @@ void parse_global_flag(CliOptions& options, std::span<const std::string> args, s
     } else {
       throw std::invalid_argument("unsupported remediation format: " + fmt + " (expected bash, terraform, or bicep)");
     }
+  } else if (token == "--min-score" || token == "--min-audit-score") {
+    options.min_audit_score = parse_double(args, index, token);
+    if (options.min_audit_score < 0.0 || options.min_audit_score > 100.0) {
+      throw std::invalid_argument(token + " must be between 0 and 100");
+    }
+  } else if (token == "--fail-if-carbon-exceeds") {
+    options.fail_if_carbon_exceeds = parse_double(args, index, token);
+    if (*options.fail_if_carbon_exceeds <= 0.0) {
+      throw std::invalid_argument("--fail-if-carbon-exceeds must be positive");
+    }
+  } else if (token == "--default-region" || token == "--region") {
+    options.default_region = require_value(args, index, token);
   } else {
     throw std::invalid_argument("unknown flag: " + token);
   }
@@ -330,6 +342,12 @@ void parse_command(CliOptions& options, std::span<const std::string> args, std::
   } else if (command == "compliance" || command == "tags" || command == "governance") {
     options.command = CommandKind::Compliance;
     collect_selectors(options, args, index);
+  } else if (command == "audit" || command == "scorecard") {
+    options.command = CommandKind::Audit;
+    collect_selectors(options, args, index);
+  } else if (command == "carbon" || command == "greenops" || command == "sustainability") {
+    options.command = CommandKind::Carbon;
+    collect_selectors(options, args, index);
   } else if (command == "version") {
     options.command = CommandKind::Version;
     parse_flags_only(options, args, index, "version");
@@ -387,6 +405,8 @@ Usage:
   azdash [global flags] budget [names...]
   azdash [global flags] commitments [skus...]
   azdash [global flags] compliance [selectors...]
+  azdash [global flags] audit [selectors...]
+  azdash [global flags] carbon [services...]
   azdash [global flags] trend [services...]
   azdash [global flags] waste [checks...]
   azdash [global flags] report cost [--path file-or-directory]
@@ -408,6 +428,9 @@ Global flags:
   --min-savings <amount>              Minimum monthly savings filter for commitments.
   --required-tags <tag1,tag2,...>     Required tag names for FinOps compliance governance audit.
   --min-compliance <pct>              Fail with exit code 2 if compliance % is below threshold.
+  --min-score <score>                 Fail with exit code 2 if FinOps audit score is below threshold (0-100).
+  --fail-if-carbon-exceeds <mt>       Fail with exit code 2 if total carbon footprint exceeds MT CO2e.
+  --default-region, --region <name>   Azure region for grid carbon intensity (default: eastus).
   --rest, --use-rest                  Direct Azure REST API mode (uses OAuth2 client credentials).
   --tenant <id>                       Reserved for tenant-aware providers.
   -o, --output <table|json|csv|markdown|html>  Output format. Defaults to table.

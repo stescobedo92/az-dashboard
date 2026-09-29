@@ -712,6 +712,81 @@ auto execute_compliance(const CliOptions& options, const CliRuntime& runtime) ->
   return 0;
 }
 
+auto execute_audit(const CliOptions& options, const CliRuntime& runtime) -> int {
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  const auto account = runtime.account_provider.account(resolved_options);
+  const auto costs = runtime.cost_provider.current_month_costs(resolved_options);
+  const auto waste = runtime.waste_provider.waste_findings(resolved_options);
+
+  TagComplianceSummary compliance_summary;
+  if (runtime.compliance_provider) {
+    compliance_summary = runtime.compliance_provider->tag_compliance(resolved_options);
+  }
+
+  std::vector<BudgetInfo> budgets;
+  if (runtime.budget_provider) {
+    budgets = runtime.budget_provider->budgets(resolved_options);
+  }
+
+  std::vector<CommitmentRecommendation> commitments;
+  if (runtime.commitment_provider) {
+    commitments = runtime.commitment_provider->commitment_recommendations(resolved_options);
+  }
+
+  CostAnomalyAssessment anomaly_assessment;
+  const auto trends = runtime.trend_provider.six_month_trends(resolved_options);
+  if (trends.size() >= 2) {
+    MonthCost current_month{.month = "current", .total = total_cost(costs), .services = costs};
+    anomaly_assessment = assess_cost_anomaly_with_attribution(trends, current_month, options.anomaly_threshold,
+                                                              options.projection_mode);
+  }
+
+  const auto report = evaluate_finops_audit(account, costs, compliance_summary, waste, budgets, commitments,
+                                            anomaly_assessment);
+  render_audit(report, options.output, runtime.out);
+
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    const auto payload = make_audit_webhook_payload(report, resolved_options);
+    if (!runtime.webhook_sender->send(options.webhook_url, payload)) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
+  if (options.min_audit_score > 0.0 && report.overall_score < options.min_audit_score) {
+    runtime.err << "error: FinOps audit score " << std::fixed << std::setprecision(1) << report.overall_score
+                << " is below required minimum threshold " << options.min_audit_score << " (Grade: "
+                << report.grade << ")\n";
+    return 2;
+  }
+
+  return 0;
+}
+
+auto execute_carbon(const CliOptions& options, const CliRuntime& runtime) -> int {
+  const auto resolved_options = resolve_subscription_alias(options, runtime.alias_store);
+  const auto costs = runtime.cost_provider.current_month_costs(resolved_options);
+  const auto waste = runtime.waste_provider.waste_findings(resolved_options);
+
+  const auto assessment = estimate_carbon_footprint(costs, waste, options.default_region);
+  render_carbon(assessment, options.output, runtime.out);
+
+  if (!options.webhook_url.empty() && runtime.webhook_sender) {
+    const auto payload = make_carbon_webhook_payload(assessment, resolved_options);
+    if (!runtime.webhook_sender->send(options.webhook_url, payload)) {
+      runtime.err << "warning: failed to send webhook alert to " << options.webhook_url << '\n';
+    }
+  }
+
+  if (options.fail_if_carbon_exceeds.has_value() && assessment.total_emissions_mt > *options.fail_if_carbon_exceeds) {
+    runtime.err << "error: total carbon emissions " << std::fixed << std::setprecision(3)
+                << assessment.total_emissions_mt << " MT CO2e exceeds limit of "
+                << *options.fail_if_carbon_exceeds << " MT CO2e\n";
+    return 2;
+  }
+
+  return 0;
+}
+
 using ScreenWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&);
 using ReportWorkflowExecutor = int (*)(const CliOptions&, const CliRuntime&, const AccountInfo&);
 
@@ -736,6 +811,8 @@ constexpr auto screen_workflows = std::array{
     ScreenWorkflowDefinition{CommandKind::Budget, execute_budget},
     ScreenWorkflowDefinition{CommandKind::Commitments, execute_commitments},
     ScreenWorkflowDefinition{CommandKind::Compliance, execute_compliance},
+    ScreenWorkflowDefinition{CommandKind::Audit, execute_audit},
+    ScreenWorkflowDefinition{CommandKind::Carbon, execute_carbon},
 };
 
 constexpr auto report_workflows = std::array{

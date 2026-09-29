@@ -22,24 +22,28 @@ The implementation is intentionally layered:
 - `ui` provides a terminal user interface (TUI) powered by FTXUI with 4 tabs, drilldown, and sparklines.
 - `webhook` sends structured alert notifications to Slack, Microsoft Teams, and generic JSON endpoints.
 - `cli_parser` encapsulates CLI grammar, validation, and help formatting.
-- `render` owns FTXUI, JSON, CSV, and Markdown presentation.
+- `cli_parser` encapsulates CLI grammar, validation, and help formatting.
+- `render` owns FTXUI, JSON, CSV, Markdown, and responsive HTML presentation.
 - `report` writes multi-page stakeholder-friendly PDF reports with headers and page numbering.
-- GTest covers all modules with 166 comprehensive unit tests.
+- GTest covers all modules with 218 comprehensive unit tests.
 
 ## Features
 
-- **Interactive TUI Dashboard (`azdash ui`)**: Terminal GUI with 4 navigable tabs (`Cost Overview`, `6-Month Trends`, `Waste Findings`, `Account`), live sparklines, and detailed finding inspectors.
+- **FinOps Foundation Maturity Scorecard (`azdash audit` / `scorecard`)**: Complete governance audit evaluating cloud posture across 5 core FinOps pillars (Tag Allocation & Hygiene, Waste & Idle Efficiency, Rate Optimization & Commitments, Budgeting & Guardrails, and Variance & Anomaly Control). Calculates weighted score (0-100), FinOps Maturity Stage (Crawl, Walk, Run), letter grade (A+ through F), and prioritizes actionable quick wins. Enforce CI/CD quality gates with `--min-score <score>`.
+- **GreenOps Carbon Footprint & Sustainability (`azdash carbon` / `greenops`)**: Enterprise cloud sustainability estimator modeling electricity consumption (kWh), location-based Scope 2 emissions, market-based Scope 2 matching, and Scope 3 embodied carbon across major Azure regional electricity grids (e.g. Sweden Central at 18 g/kWh vs East US at 380 g/kWh). Computes avoided carbon ($kg\ CO_2e$) from eliminating detected waste, EPA equivalencies (passenger cars/yr, tree seedlings), and CI/CD emissions fail gates (`--fail-if-carbon-exceeds <mt>`).
+- **Interactive TUI Cockpit (`azdash ui`)**: Terminal GUI with 6 navigable tabs (`Cost Drilldown`, `6-Month Trends`, `Waste Findings`, `Budgets & Commitments`, `Tag Governance`, and `Account & Aliases`), live sparklines, and detailed finding inspectors.
+- **Cost Anomaly Root-Cause Attribution (`azdash anomaly`)**: Statistical Z-Score spike detection decomposing spikes across services with delta, % change, spike contribution share, and impact severity (`Critical`, `High`, `Medium`, `Low`). Configurable sensitivity (`--anomaly-threshold`) and CI/CD failure gate (`--fail-on-anomaly`).
+- **Holt-Winters Trend Momentum Forecasting (`--projection holt-winters`)**: Double exponential smoothing with level ($\alpha=0.5$) and trend ($\beta=0.3$) adapting to accelerating expenditure curves.
+- **IaC Remediation Export (`--remediation-format terraform|bicep|bash`)**: Generate native Terraform `removed` blocks or shell scripts to automate resource decommissioning directly from detected waste findings.
 - **Direct Azure REST Client (`--rest`)**: Standalone mode using OAuth2 Service Principal credentials (`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`) without needing Python or the Azure CLI.
 - **Enterprise Budgets (`azdash budget`)**: Track consumption budgets against current spend with visual progress bars and exceeded indicators.
 - **Commitments & Reservations Analysis (`azdash commitments` / `ri`)**: Compute Savings Plans and Reserved Instances (1-year / 3-year) recommendations with potential monthly savings calculations.
 - **Management Groups Hierarchy (`--management-group` / `--mg`)**: Recursively query and aggregate costs across all subscriptions under an Azure Management Group.
 - **Interactive Waste Remediation (`-i` / `--interactive`)**: Step-by-step interactive prompt to inspect and safely apply cleanup actions with full `--dry-run` simulation support.
-- **Remediation Script Generator (`--generate-remediation <path>`)**: Automatically output executable bash scripts for remediating identified waste.
-- **Extended FinOps Waste Heuristics**: Detects orphan NSGs, unused Route Tables, idle NAT Gateways ($32.40/mo savings), empty App Service Plans, unattached disks, orphan public IPs, and stopped VMs.
+- **Extended FinOps Waste Heuristics**: Detects orphan NSGs, unused Route Tables, idle NAT Gateways ($32.40/mo savings), empty App Service Plans, unattached Load Balancers (0 backend pools), unattached NICs, unattached disks, orphan public IPs, and stopped VMs.
 - **Advanced Multi-Tag Filtering (`--filter-tag`)**: Filter resources with syntax supporting exact matches (`k=v`), multi-value OR (`k=v1,v2`), negation (`k!=v`), existence (`k`), and absence (`!k`).
 - **Tag Compliance Governance (`azdash compliance`)**: Audit Azure resources against required tags (`--required-tags`), measure unallocated untagged spend, generate auto-tag remediation scripts (`--generate-remediation`), and enforce CI/CD compliance gates (`--min-compliance <pct>`).
-- **Responsive HTML Reports (`-o html`)**: Generate modern, standalone executive HTML dashboards for costs, trends, waste, budgets, commitments, and compliance.
-- **6-Tab Interactive TUI Dashboard (`azdash ui`)**: Full-screen terminal dashboard covering Cost Drilldown, 6-Month Trends, Waste Findings, Budgets & Commitments, Tag Governance, and Account & Aliases.
+- **Responsive HTML Reports (`-o html`)**: Generate modern, standalone executive HTML dashboards for costs, trends, waste, budgets, commitments, compliance, anomalies, audit scorecard, and carbon footprint.
 - **Persistent Configuration (`.azdashrc` / `azdash.json` / `--config`)**: Automatic configuration discovery from local directory or `~/.azdash/config.json` with CLI flag override precedence.
 - **Server-Side JMESPath Projection (`--fast`)**: Trim 80-90% of payload bandwidth by projecting fields directly within Azure CLI queries.
 - **Local Trend Caching (`--no-cache` to bypass)**: Cache finalized historical billing months in local storage with atomic writes for instant trend reports.
@@ -222,6 +226,17 @@ azdash --output markdown cost
 azdash anomaly
 azdash --anomaly-threshold 2.5 anomaly
 azdash --fail-on-anomaly anomaly  # Return exit code 2 if cost spike detected (CI/CD gate)
+
+# FinOps Foundation Maturity Scorecard & Governance Audit
+azdash audit
+azdash --min-score 80.0 audit   # Return exit code 2 if FinOps maturity score is below 80 (CI/CD gate)
+azdash -o html audit > audit_scorecard.html
+
+# GreenOps Cloud Carbon Footprint & Sustainability Estimation
+azdash carbon
+azdash --default-region swedencentral carbon
+azdash --fail-if-carbon-exceeds 1.5 carbon  # Fail if carbon footprint crosses 1.5 MT CO2e
+azdash -o html carbon > carbon_footprint.html
 
 # Interactive waste remediation with confirmation prompt
 azdash -i waste

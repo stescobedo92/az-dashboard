@@ -230,5 +230,36 @@ TEST(CliParserTest, ParsesAnomalyAndRemediationFlags) {
   EXPECT_THROW(parse({"--remediation-format", "yaml", "cost"}), std::invalid_argument);
 }
 
+TEST(CliParserTest, ParsesAuditAndCarbonCommandsAndFlags) {
+  const auto audit_opts = parse({"--min-score", "85.5", "audit"});
+  EXPECT_EQ(audit_opts.command, CommandKind::Audit);
+  EXPECT_DOUBLE_EQ(audit_opts.min_audit_score, 85.5);
+
+  const auto scorecard_opts = parse({"scorecard"});
+  EXPECT_EQ(scorecard_opts.command, CommandKind::Audit);
+
+  const auto carbon_opts = parse({
+      "--fail-if-carbon-exceeds", "2.5",
+      "--default-region", "swedencentral",
+      "carbon"
+  });
+  EXPECT_EQ(carbon_opts.command, CommandKind::Carbon);
+  ASSERT_TRUE(carbon_opts.fail_if_carbon_exceeds.has_value());
+  EXPECT_DOUBLE_EQ(*carbon_opts.fail_if_carbon_exceeds, 2.5);
+  EXPECT_EQ(carbon_opts.default_region, "swedencentral");
+
+  const auto greenops_opts = parse({"--region", "francecentral", "greenops"});
+  EXPECT_EQ(greenops_opts.command, CommandKind::Carbon);
+  EXPECT_EQ(greenops_opts.default_region, "francecentral");
+
+  const auto sust_opts = parse({"sustainability"});
+  EXPECT_EQ(sust_opts.command, CommandKind::Carbon);
+
+  EXPECT_THROW(parse({"--min-score", "-5.0", "audit"}), std::invalid_argument);
+  EXPECT_THROW(parse({"--min-score", "105.0", "audit"}), std::invalid_argument);
+  EXPECT_THROW(parse({"--fail-if-carbon-exceeds", "-1.0", "carbon"}), std::invalid_argument);
+  EXPECT_THROW(parse({"--fail-if-carbon-exceeds", "0", "carbon"}), std::invalid_argument);
+}
+
 } // namespace
 } // namespace azdash

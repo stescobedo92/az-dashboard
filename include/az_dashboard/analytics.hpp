@@ -236,4 +236,43 @@ auto assess_cost_anomaly_with_attribution(
     double zscore_threshold = 2.0,
     ProjectionMode mode = ProjectionMode::Linear) -> CostAnomalyAssessment;
 
+/**
+ * @brief Assesses FinOps maturity across the 5 core pillars of the FinOps Foundation.
+ * @param account Account identity.
+ * @param current_costs Current month costs breakdown.
+ * @param tag_compliance Tag compliance and allocation assessment.
+ * @param waste_findings Detected orphan and idle waste items.
+ * @param budgets Active Azure consumption budgets.
+ * @param commitments Recommended commitment discounts.
+ * @param anomaly Cost anomaly assessment.
+ * @return Complete FinOps governance scorecard with pillar grades and recommendations.
+ */
+auto evaluate_finops_audit(
+    const AccountInfo& account,
+    const std::vector<ServiceCost>& current_costs,
+    const TagComplianceSummary& tag_compliance,
+    const std::vector<WasteFinding>& waste_findings,
+    const std::vector<BudgetInfo>& budgets,
+    const std::vector<CommitmentRecommendation>& commitments,
+    const CostAnomalyAssessment& anomaly) -> FinOpsAuditReport;
+
+/**
+ * @brief Returns regional electricity grid carbon intensity in gCO2e/kWh for an Azure region.
+ * @param region Azure region identifier (e.g. eastus, westeurope).
+ * @return Carbon intensity in gCO2e per kWh.
+ */
+auto get_regional_grid_intensity(std::string_view region) -> double;
+
+/**
+ * @brief Estimates cloud carbon footprint and potential waste carbon avoidance.
+ * @param costs Service costs to analyze.
+ * @param waste Waste findings to calculate avoidable emissions.
+ * @param region Default Azure region for grid intensity.
+ * @return Full GreenOps carbon footprint assessment.
+ */
+auto estimate_carbon_footprint(
+    std::span<const ServiceCost> costs,
+    std::span<const WasteFinding> waste = {},
+    std::string_view region = "eastus") -> CarbonFootprintAssessment;
+
 } // namespace azdash
