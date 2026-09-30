@@ -112,6 +112,9 @@ jobs:
           NestedInstallerFiles:
             - RelativeFilePath: azdash.exe
               PortableCommandAlias: azdash
+          Dependencies:
+            PackageDependencies:
+              - PackageIdentifier: Microsoft.VCRedist.2015+.x64
           Installers:
             - Architecture: x64
               InstallerUrl: $env:INSTALLER_URL
